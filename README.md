@@ -1,4 +1,6 @@
-# <img width="30" height="30" alt="and we run..." src="https://github.com/user-attachments/assets/b2378f3d-e0ce-4828-a5e8-74bc3763f57a" />  ct-sorter - fastest & lightest CertStream monitor & sorter
+<img width="1008" height="140" alt="image" src="https://github.com/user-attachments/assets/e2022d42-e156-4d9f-a8d7-92cfd274b156" />
+
+# ct-sorter - fastest & lightest CertStream monitor & sorter
 
 `ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for real-time attack-surface discovery and bla-bla-bla, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
 
