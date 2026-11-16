@@ -1,10 +1,10 @@
 <img width="1008" height="140" alt="image" src="https://github.com/user-attachments/assets/e2022d42-e156-4d9f-a8d7-92cfd274b156" />
 
-# ct-sorter - fastest & lightest CertStream monitor & sorter
+# cest - fastest & lightest CertStream monitor & sorter
 
-`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for `put your task here`, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
+`cest` is a fast-as-hell and less-greedy Certificate Transparency monitor built for `put your task here`, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
 
-Why ct-sorter?
+Why cest?
 - Cuz it has 26% less traffic consumption, keeping 99.2% of new domains, compared to `certstream-server-go`.
 - It cuts off 99% of useless domains, making domains stream ~31% lighter out of the box.
 - It's built with love and supercharged with Ukrainian energy.
@@ -12,19 +12,19 @@ Why ct-sorter?
 
 Usage:
 ```bash
-go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections that define us...
+go install github.com/aels/cest/cmd/cest@latest # but the rusty imperfections that define us...
 ```
 Than
 ```bash
-ct-sorter --daemon
+cest --daemon
 ```
 Then connect with a WebSocket client such as `websocat`:
 ```bash
 websocat ws://127.0.0.1:4949/all | python3 any-of-your-tools.py
 ```
-The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directory is in your `PATH`, then run `ct-sorter`.
+The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directory is in your `PATH`, then run `cest`.
 
-> The ct-sorter is intentionally optimized for only one task: "give me only domains feed, fast". Selected high-overlap CT logs are denied, non-active logs are skipped, the default noise filter removes known high-volume domains, and an in-memory FIFO set keeps you from dupes. Use `--nofilter` to find out how deep a rabbit hole is.
+> The cest is intentionally optimized for only one task: "give me only domains feed, fast". Selected high-overlap CT logs are denied, non-active logs are skipped, the default noise filter removes known high-volume domains, and an in-memory FIFO set keeps you from dupes. Use `--nofilter` to find out how deep a rabbit hole is.
 
 ## Made for bug hunters, hackers & 0-day owners.
 
@@ -44,10 +44,10 @@ That's a lot of trash (like a 30% offload). It can be disabled or extended with 
 
 The current stable Go release on Ubuntu or Debian is recommended.
 ```bash
-git clone https://github.com/aels/ct-sorter.git
-cd ct-sorter
-go build -o ct-sorter ./cmd/ct-sorter
-./ct-sorter
+git clone https://github.com/aels/cest.git
+cd cest
+go build -o cest ./cmd/cest
+./cest
 ```
 
 ## Command-line options
@@ -99,19 +99,19 @@ For every accepted domain, the sorter:
 Exclude names containing `dev`, `staging` or `internal` while keeping the built-in filter enabled:
 
 ```bash
-ct-sorter --filter '(^|\.)(dev|staging|internal)(\.|$)'
+cest --filter '(^|\.)(dev|staging|internal)(\.|$)'
 ```
 
 Disable the built-in filter but retain the custom expression:
 
 ```bash
-ct-sorter --nofilter --filter '\.example\.com$'
+cest --nofilter --filter '\.example\.com$'
 ```
 
 ### Detect WordPress and Magento targets
 
 ```bash
-ct-sorter \
+cest \
   --sort 'wordpress:wp-content' \
   --sort 'magento:Magento_' \
   --sort 'shops:class="cart"'
@@ -130,7 +130,7 @@ A domain may appear in more than one route when multiple literals match.
 ### Use custom DNS resolvers and tighter timeouts
 
 ```bash
-ct-sorter \
+cest \
   --sort 'wordpress:wp-content' \
   --dns '1.1.1.1,8.8.8.8,9.9.9.9' \ # only 2 DNS servers will be for sure not enough to resolve 5000 domains/sec
   --dns-timeout 750ms \
@@ -141,7 +141,7 @@ ct-sorter \
 ### Listen on an external interface
 
 ```bash
-ct-sorter --expose --port 4200 --daemon --sort 'wordpress:wp-content'
+cest --expose --port 4200 --daemon --sort 'wordpress:wp-content'
 ```
 
 This exposes the unauth server on `0.0.0.0:4200`. Extremely useful when you have only one server with 200Mb/s bandwidth cap to knock every domain of a stream over HTTP. Less powerful nodes can just listen for 10-20 events/sec sitting somewhere else.
