@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/aels/ct-sorter/internal/dnsresolver"
-	"github.com/aels/ct-sorter/internal/ring"
+	"github.com/aels/cest/internal/dnsresolver"
+	"github.com/aels/cest/internal/ring"
 )
 
 const (

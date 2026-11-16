@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aels/ct-sorter/internal/dnsresolver"
-	"github.com/aels/ct-sorter/internal/domain"
-	"github.com/aels/ct-sorter/internal/sorter"
+	"github.com/aels/cest/internal/dnsresolver"
+	"github.com/aels/cest/internal/domain"
+	"github.com/aels/cest/internal/sorter"
 )
 
 const Version = "0.1.0"
@@ -59,7 +59,7 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 		}
 	}
 	cfg := Config{Port: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: 2 * time.Second, ResponseTimeout: 5 * time.Second}
-	fs := flag.NewFlagSet("ct-sorter", flag.ContinueOnError)
+	fs := flag.NewFlagSet("cest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var rawSort []string
 	var help, version bool
@@ -158,7 +158,7 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `Usage: ct-sorter [options]
+	fmt.Fprint(w, `Usage: cest [options]
   -nf, --nofilter                 disable built-in filter
   -f, --filter REGEX              additional case-insensitive exclusion regexp
   -p, --port PORT                 listen port (default 4949)

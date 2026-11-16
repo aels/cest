@@ -1,4 +1,4 @@
-module github.com/aels/ct-sorter
+module github.com/aels/cest
 
 go 1.26
 

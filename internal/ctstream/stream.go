@@ -308,7 +308,7 @@ func (s *Stream) get(ctx context.Context, endpoint string, limit int64) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "ct-sorter/ctstream")
+	req.Header.Set("User-Agent", "cest/ctstream")
 	resp, err := s.cfg.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
