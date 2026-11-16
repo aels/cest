@@ -1,6 +1,6 @@
-# ct-sorter
+# ct-sorter - fastest & lightest CertStream monitor & sorter
 
-`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for real-time attack-surface discovery as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
+`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for real-time attack-surface discovery and bla-bla-bla, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
 
 ```bash
 go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections, that defines us...
@@ -13,12 +13,12 @@ The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directo
 ## Made for bug hunters, hackers & 0-day owners.
 
 - **Reduce duplicate noise.** Wildcards are normalized and recent domains are suppressed by a 100,000-entry FIFO set.
-- **Filter common trash by default.** The default filter removes most of large cloud, hosting, CDN and platform domains; it can be disabled or extended with your own regular expression.
+- **Filter common trash by default.** The default filter removes most large cloud, hosting, CDN, and platform domains; it can be disabled or extended with your own regular expression.
 - **Create your own live feeds.** Shops? VPNs? Any CMS, any app, really. `--sort wp:wp-content` exposes a `/wp` WebSocket containing domains whose HTTP or HTTPS response includes `wp-content`.
 - **Use several classifiers at once.** A response may match multiple rules, and the domain will be published to every matching route.
 - **Built-in DNS server, no bottlenecks.** The built-in UDP resolver benchmarks public resolvers and rotates among the fastest available servers.
-- **Observe when shit goes wrong.** `/stats` reports CT, DNS, HTTP, queue and per-route counters, including evicted sort tasks and client messages.
-- **Run cheaply.** Without `--sort`, no DNS resolver, HTTP worker pool, or sort queue is created.
+- **Observe when shit goes wrong.** `/stats` reports CT, DNS, HTTP, queue, and per-route counters, including evicted sort tasks and client messages.
+- **Run cheaply.** Need only a pure domain list? - `/all`. Without `--sort`, no DNS resolver & no HTTP worker pool are created.
 
 ## Requirements and source build
 
