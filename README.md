@@ -3,11 +3,14 @@
 # ct-sorter - fastest & lightest CertStream monitor & sorter
 
 `ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for `put your task here`, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
+
 Why ct-sorter?
 - Cuz it has 26% less traffic consumption, keeping 99.2% of new domains, compared to `certstream-server-go`.
 - It cuts off 99% of useless domains, making domains stream ~31% lighter out of the box.
 - It's built with love and supercharged with Ukrainian energy.
 
+
+Usage:
 ```bash
 go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections that define us...
 ```
@@ -25,7 +28,7 @@ The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directo
 
 ## Made for bug hunters, hackers & 0-day owners.
 
-- **Reduce duplicate noise.** Wildcards are normalized and dupe domains are suppressed by a 100,000-entry FIFO set.
+- **Reduce duplicate noise.** Wildcards are normalized and dupe domains are suppressed by a 100k FIFO set.
 - **Filter common trash by default.** The default filter removes most large cloud, hosting, CDN, and platform domains:
 ```text
 \.(google|googleapis|amazon|amazonaws|microsoft|azure|cloudflare|akamai|fastly|github|facebook|apple|netflix|shopify|squarespace|wix|godaddy|wordpress\.com|herokuapp|vercel|netlify|pages\.dev|firebaseapp|cloudfront|letsencrypt|sectigo|digicert|globalsign|comodo|verisign|gov|edu|mil)|workers\.dev|quickconnect\.(to|cn)|icdn\.ru|aws\.dev|\.on\.aws|netcraze\.io|mybluehost\.me|sslip\.io|nip\.io|amplifyapp\.com|platformsh\.site|zendesk\.com|synology\.me|remotewd\.com|meraki\.direct|duckdns\.org|plesk\.page|workdaysuv|website-k\.com|technology2022\.com|altervista\.org|haplorrhini\.com|tunwg\.com|towerbrands\.asia|dpdns\.org|certsbridge\.com|myvolumio\.org|ui\.direct|mybluelantern\.com|sovcloud-core\.fr|hstgr\.cloud|myftpupload\.com|xmit\.dev|mywhc\.ca|sub-site\.eu|endl\.site|hostclusters\.com|server-he\.de|rakkoserver\.net|optum\.com|a2z\.eu|wholesale-nondurable\.org|trucking-warehousing\.org|ciscosecureaccess|sourcemanager\.dev|cpanel\.site|traefik\.me|stratoserver\.net|ts\.net|ccwu\.cc|battery\.cam|servi\.tn|testsoftwares\.site|uhc\.com|flowww\.net|luckysrv\.de|ccaiplatform\.com|skalator\.de|judikamuhoki|freedomsoftsites\.com|ekalamfoundation\.com|gaymonrealtygroup\.com|adison\.co|jnj\.com|pustekno\.id|verify-recruit\.work|beatplugs\.com|texastopn\.top|whm\.
