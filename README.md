@@ -1,6 +1,6 @@
 # ct-sorter
 
-`ct-sorter` is a fast-as-hell and less-gready Certificate Transparency monitor built for real-time attack-surface discovery as drop-in replacement of https://github.com/d-Rickyy-b/certstream-server-go.
+`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for real-time attack-surface discovery as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
 
 ```bash
 go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections, that defines us...
@@ -15,10 +15,10 @@ The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directo
 - **Reduce duplicate noise.** Wildcards are normalized and recent domains are suppressed by a 100,000-entry FIFO set.
 - **Filter common trash by default.** The default filter removes most of large cloud, hosting, CDN and platform domains; it can be disabled or extended with your own regular expression.
 - **Create your own live feeds.** Shops? VPNs? Any CMS, any app, really. `--sort wp:wp-content` exposes a `/wp` WebSocket containing domains whose HTTP or HTTPS response includes `wp-content`.
-- **Use several classifiers at once.** A response may match multiple rules and the domain will be published to every matching route.
-- **Built-in own DNS senver, no bottlenecks.** The built-in UDP resolver benchmarks public resolvers and rotates among the fastest available servers.
+- **Use several classifiers at once.** A response may match multiple rules, and the domain will be published to every matching route.
+- **Built-in DNS server, no bottlenecks.** The built-in UDP resolver benchmarks public resolvers and rotates among the fastest available servers.
 - **Observe when shit goes wrong.** `/stats` reports CT, DNS, HTTP, queue and per-route counters, including evicted sort tasks and client messages.
-- **Run cheaply.** Without `--sort`, no DNS resolver, HTTP worker pool or sort queue is created.
+- **Run cheaply.** Without `--sort`, no DNS resolver, HTTP worker pool, or sort queue is created.
 
 ## Requirements and source build
 
@@ -207,7 +207,7 @@ On `/all`, one WebSocket text frame may contain up to 100 domains separated by `
 
 ## DNS and outbound safety
 
-The sorter uses its own UDP/53 A resolver with EDNS(0), bounded DNS parsing and at most three CNAME transitions. It does not use `/etc/resolv.conf`, DoH, DoT, DNS-over-TCP, DNSSEC or a DNS cache.
+The sorter uses its own UDP/53 A resolver with EDNS(0), bounded DNS parsing, and at most three CNAME transitions. It does not use `/etc/resolv.conf`, DoH, DoT, DNS-over-TCP, DNSSEC, or a DNS cache.
 
 Automatic resolver candidates:
 
@@ -221,12 +221,12 @@ Automatic resolver candidates:
 
 They are benchmarked from the running machine against `example.com`, `iana.org` and `cloudflare.com`; up to ten successful resolvers are selected and refreshed hourly.
 
-HTTP connects directly to the selected public IPv4 while preserving the domain in the `Host` header and TLS SNI. Redirects and keep-alive are disabled. HTTPS fallback intentionally accepts invalid, expired and hostname-mismatched certificates.
+HTTP connects directly to the selected public IPv4 while preserving the domain in the `Host` header and TLS SNI. Redirects and keep-alive are disabled. HTTPS fallback intentionally accepts invalid, expired, and hostname-mismatched certificates.
 
 ## Operational limitations
 
 - The output is optimized for discovery efficiency, not guaranteed complete CT coverage.
-- CT signatures, inclusion proofs and consistency proofs are not verified.
+- CT signatures, inclusion proofs, and consistency proofs are not verified.
 - State is not persisted; domains issued while the process is stopped are not recovered.
 - DNS has no TCP fallback. A truncated UDP response is retried once through another resolver and then skipped.
 - Only IPv4 A records are used for HTTP sorting.
