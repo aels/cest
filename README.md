@@ -2,20 +2,35 @@
 
 # ct-sorter - fastest & lightest CertStream monitor & sorter
 
-`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for real-time attack-surface discovery and bla-bla-bla, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
+`ct-sorter` is a fast-as-hell and less-greedy Certificate Transparency monitor built for `put your task here`, as a drop-in replacement for https://github.com/d-Rickyy-b/certstream-server-go.
+Why ct-sorter?
+- Cuz it has 26% less traffic consumption, keeping 99.2% of new domains, compared to `certstream-server-go`.
+- It cuts off 99% of useless domains, making domains stream ~31% lighter out of the box.
+- It's built with love and supercharged with Ukrainian energy.
 
 ```bash
-go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections, that defines us...
+go install github.com/aels/ct-sorter/cmd/ct-sorter@latest # but the rusty imperfections that define us...
 ```
-
+Than
+```bash
+ct-sorter --daemon
+```
+Then connect with a WebSocket client such as `websocat`:
+```bash
+websocat ws://127.0.0.1:4949/all | python3 any-of-your-tools.py
+```
 The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directory is in your `PATH`, then run `ct-sorter`.
 
-> The stream is intentionally optimized rather than exhaustive: selected high-overlap CT logs are denied, non-active logs are skipped, the default noise filter removes known high-volume domains, and an in-memory FIFO set suppresses the last 100,000 unique names. Use `--nofilter` when broader visibility is more important than signal-to-noise ratio.
+> The ct-sorter is intentionally optimized for only one task: "give me only domains feed, fast". Selected high-overlap CT logs are denied, non-active logs are skipped, the default noise filter removes known high-volume domains, and an in-memory FIFO set keeps you from dupes. Use `--nofilter` to find out how deep a rabbit hole is.
 
 ## Made for bug hunters, hackers & 0-day owners.
 
-- **Reduce duplicate noise.** Wildcards are normalized and recent domains are suppressed by a 100,000-entry FIFO set.
-- **Filter common trash by default.** The default filter removes most large cloud, hosting, CDN, and platform domains; it can be disabled or extended with your own regular expression.
+- **Reduce duplicate noise.** Wildcards are normalized and dupe domains are suppressed by a 100,000-entry FIFO set.
+- **Filter common trash by default.** The default filter removes most large cloud, hosting, CDN, and platform domains:
+```text
+\.(google|googleapis|amazon|amazonaws|microsoft|azure|cloudflare|akamai|fastly|github|facebook|apple|netflix|shopify|squarespace|wix|godaddy|wordpress\.com|herokuapp|vercel|netlify|pages\.dev|firebaseapp|cloudfront|letsencrypt|sectigo|digicert|globalsign|comodo|verisign|gov|edu|mil)|workers\.dev|quickconnect\.(to|cn)|icdn\.ru|aws\.dev|\.on\.aws|netcraze\.io|mybluehost\.me|sslip\.io|nip\.io|amplifyapp\.com|platformsh\.site|zendesk\.com|synology\.me|remotewd\.com|meraki\.direct|duckdns\.org|plesk\.page|workdaysuv|website-k\.com|technology2022\.com|altervista\.org|haplorrhini\.com|tunwg\.com|towerbrands\.asia|dpdns\.org|certsbridge\.com|myvolumio\.org|ui\.direct|mybluelantern\.com|sovcloud-core\.fr|hstgr\.cloud|myftpupload\.com|xmit\.dev|mywhc\.ca|sub-site\.eu|endl\.site|hostclusters\.com|server-he\.de|rakkoserver\.net|optum\.com|a2z\.eu|wholesale-nondurable\.org|trucking-warehousing\.org|ciscosecureaccess|sourcemanager\.dev|cpanel\.site|traefik\.me|stratoserver\.net|ts\.net|ccwu\.cc|battery\.cam|servi\.tn|testsoftwares\.site|uhc\.com|flowww\.net|luckysrv\.de|ccaiplatform\.com|skalator\.de|judikamuhoki|freedomsoftsites\.com|ekalamfoundation\.com|gaymonrealtygroup\.com|adison\.co|jnj\.com|pustekno\.id|verify-recruit\.work|beatplugs\.com|texastopn\.top|whm\.
+```
+That's a lot of trash (like a 30% offload). It can be disabled or extended with your own regular expression, btw.
 - **Create your own live feeds.** Shops? VPNs? Any CMS, any app, really. `--sort wp:wp-content` exposes a `/wp` WebSocket containing domains whose HTTP or HTTPS response includes `wp-content`.
 - **Use several classifiers at once.** A response may match multiple rules, and the domain will be published to every matching route.
 - **Built-in DNS server, no bottlenecks.** The built-in UDP resolver benchmarks public resolvers and rotates among the fastest available servers.
@@ -25,7 +40,6 @@ The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directo
 ## Requirements and source build
 
 The current stable Go release on Ubuntu or Debian is recommended.
-
 ```bash
 git clone https://github.com/aels/ct-sorter.git
 cd ct-sorter
@@ -44,7 +58,7 @@ Both the short and long forms shown below are supported.
 | `-p PORT`, `--port PORT` | `4949` | Port for the HTTP and WebSocket server. |
 | `-s PATH:LITERAL`, `--sort PATH:LITERAL` | none | Add an HTTP body classifier and WebSocket route. Repeatable. Search is a case-sensitive literal byte match. |
 | `-dns LIST`, `--dns LIST` | automatic | Comma-separated public IPv4 DNS servers, for example `1.1.1.1,8.8.8.8`. Port is always UDP/53. |
-| `-expose`, `--expose` | disabled | Bind to `0.0.0.0` instead of `127.0.0.1`. There is no built-in authentication or TLS. |
+| `-expose`, `--expose` | disabled | Bind to `0.0.0.0` instead of `127.0.0.1`. There is no built-in auth/TLS - share it with friends & enemies. |
 | `-t N`, `--threads N` | `2000` | Maximum concurrent sort workers. The sort ring buffer holds `N × 10` pending domains. |
 | `--client-buffer-mb N` | `10` | Independent unsent-message buffer for each WebSocket client, in MiB. |
 | `--dns-timeout DURATION` | `1s` | Timeout for a UDP DNS query. Uses Go durations such as `500ms` or `2s`. |
@@ -76,24 +90,6 @@ For every accepted domain, the sorter:
 5. scans only a successful response body and publishes the domain to every matching sort route.
 
 ## Examples
-
-### Stream new domains with the default noise filter
-
-```bash
-ct-sorter
-```
-
-Connect with a WebSocket client such as `websocat`:
-
-```bash
-websocat ws://127.0.0.1:4949/all
-```
-
-### Disable the built-in filter
-
-```bash
-ct-sorter --nofilter
-```
 
 ### Add a custom exclusion filter
 
@@ -133,43 +129,19 @@ A domain may appear in more than one route when multiple literals match.
 ```bash
 ct-sorter \
   --sort 'wordpress:wp-content' \
-  --dns '1.1.1.1,8.8.8.8,9.9.9.9' \
+  --dns '1.1.1.1,8.8.8.8,9.9.9.9' \ # only 2 DNS servers will be for sure not enough to resolve 5000 domains/sec
   --dns-timeout 750ms \
   --connect-timeout 1500ms \
   --response-timeout 4s
 ```
 
-### Reduce or increase HTTP concurrency
-
-A smaller deployment:
-
-```bash
-ct-sorter --sort 'wordpress:wp-content' --threads 250
-```
-
-This creates 250 workers and a 2,500-domain sort ring buffer.
-
-A larger deployment:
-
-```bash
-ct-sorter --sort 'wordpress:wp-content' --threads 4000
-```
-
-This creates 4,000 workers and a 40,000-domain sort ring buffer. Increase concurrency carefully: open sockets, bandwidth and remote-site latency usually become the limiting factors.
-
 ### Listen on an external interface
 
 ```bash
-ct-sorter --expose --port 8080
+ct-sorter --expose --port 4200 --daemon --sort 'wordpress:wp-content'
 ```
 
-This exposes the unauthenticated server on `0.0.0.0:8080`. Use a firewall or reverse proxy when the host is reachable from untrusted networks.
-
-### Run in the background
-
-```bash
-ct-sorter --daemon --sort 'wordpress:wp-content'
-```
+This exposes the unauth server on `0.0.0.0:4200`. Extremely useful when you have only one server with 200Mb/s bandwidth cap to knock every domain of a stream over HTTP. Less powerful nodes can just listen for 10-20 events/sec sitting somewhere else.
 
 ### Inspect runtime statistics
 
@@ -223,17 +195,19 @@ Automatic resolver candidates:
 
 They are benchmarked from the running machine against `example.com`, `iana.org` and `cloudflare.com`; up to ten successful resolvers are selected and refreshed hourly.
 
-HTTP connects directly to the selected public IPv4 while preserving the domain in the `Host` header and TLS SNI. Redirects and keep-alive are disabled. HTTPS fallback intentionally accepts invalid, expired, and hostname-mismatched certificates.
+HTTP connects directly to the selected public IPv4 while preserving the domain in the `Host` header and TLS SNI.
 
 ## Operational limitations
 
+- HTTPS fallback intentionally accepts invalid, expired, and hostname-mismatched certificates.
+- Redirects and keep-alive are disabled.
 - The output is optimized for discovery efficiency, not guaranteed complete CT coverage.
 - CT signatures, inclusion proofs, and consistency proofs are not verified.
 - State is not persisted; domains issued while the process is stopped are not recovered.
 - DNS has no TCP fallback. A truncated UDP response is retried once through another resolver and then skipped.
-- Only IPv4 A records are used for HTTP sorting.
+- Only IPv4 A records (no AAAA) are used for HTTP sorting.
 - The embedded server has no authentication or TLS.
-- Recent-domain deduplication intentionally hides repeated certificate issuance until the domain leaves the 100,000-entry FIFO.
+- Recent-domain deduplication intentionally hides repeated certificate issuance until the domain leaves the 100k-entry FIFO.
 
 ## Tests
 
