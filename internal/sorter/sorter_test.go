@@ -48,6 +48,7 @@ func TestHTTPFallbackDirectIPGzipLimitAndMatching(t *testing.T) {
 			t.Errorf("HTTPS Host = %q", r.Host)
 		}
 		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("X-Powered-By", "HeaderNeedle")
 		gz := gzip.NewWriter(w)
 		_, _ = gz.Write([]byte("prefix Needle " + strings.Repeat("x", 100)))
 		_ = gz.Close()
@@ -76,7 +77,7 @@ func TestHTTPFallbackDirectIPGzipLimitAndMatching(t *testing.T) {
 	}
 	published := make(chan string, 2)
 	s, err := New(context.Background(), Config{
-		Rules:   []Rule{{Path: "hit", Literal: "Needle"}, {Path: "case", Literal: "needle"}},
+		Rules:   []Rule{{Path: "hit", Literal: "Needle"}, {Path: "hit", Literal: "HeaderNeedle"}, {Path: "case", Literal: "needle"}},
 		Threads: 1, BodyLimit: 20, Resolver: stubResolver{ip: netip.MustParseAddr("93.184.216.34")}, DialContext: dial,
 		Publish: func(path, domain string) { published <- path + ":" + domain },
 	})
@@ -109,6 +110,42 @@ func TestHTTPFallbackDirectIPGzipLimitAndMatching(t *testing.T) {
 	defer mu.Unlock()
 	if len(requested) != 2 || requested[0] != "93.184.216.34:80" || requested[1] != "93.184.216.34:443" {
 		t.Fatalf("dial addresses = %v", requested)
+	}
+}
+
+func TestAdditionalSuccessCodeAndHeaderMatching(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Technology", "SpecialHeader")
+		w.WriteHeader(http.StatusSeeOther)
+		_, _ = w.Write([]byte("ignored redirect body"))
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	published := make(chan string, 1)
+	s, err := New(context.Background(), Config{
+		Rules: []Rule{{Path: "tech", Literal: "SpecialHeader"}}, SuccessCodes: []int{http.StatusSeeOther}, Threads: 1,
+		Resolver: stubResolver{ip: netip.MustParseAddr("93.184.216.34")},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		},
+		Publish: func(path, domain string) { published <- path + ":" + domain },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Submit("example.com")
+	select {
+	case got := <-published:
+		if got != "tech:example.com" {
+			t.Fatalf("published %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("publication timeout")
+	}
+	stats := s.Stats()
+	if stats.HTTPAdditionalSuccess != 1 || stats.HTTPS200 != 0 {
+		t.Fatalf("stats = %+v", stats)
 	}
 }
 

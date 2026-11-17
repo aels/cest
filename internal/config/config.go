@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,8 @@ type Config struct {
 	NoFilter                                    bool
 	Filter                                      string
 	Port                                        int
-	Sort                                        []sorter.Rule
+	Streams                                     []sorter.Rule
+	SuccessCodes                                []int
 	DNSServers                                  string
 	Expose, Daemon                              bool
 	Threads, ClientBufferMB, BodyLimitKB        int
@@ -61,7 +63,7 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 	cfg := Config{Port: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: 2 * time.Second, ResponseTimeout: 5 * time.Second}
 	fs := flag.NewFlagSet("cest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var rawSort []string
+	var rawStreams []string
 	var help, version bool
 	boolAlias := func(short, long string, ptr *bool, usage string) {
 		fs.BoolVar(ptr, short, false, usage)
@@ -109,9 +111,17 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 	addOnce([]string{"dns-timeout"}, "dns-timeout", duration(&cfg.DNSTimeout), "DNS timeout")
 	addOnce([]string{"connect-timeout"}, "connect-timeout", duration(&cfg.ConnectTimeout), "connect timeout")
 	addOnce([]string{"response-timeout"}, "response-timeout", duration(&cfg.ResponseTimeout), "response timeout")
-	mv := &multiValue{values: &rawSort}
+	addOnce([]string{"c", "code"}, "code", func(value string) error {
+		codes, err := parseCodes(value)
+		if err != nil {
+			return err
+		}
+		cfg.SuccessCodes = codes
+		return nil
+	}, "additional successful HTTP status codes")
+	mv := &multiValue{values: &rawStreams}
 	fs.Var(mv, "s", "path:literal (repeatable)")
-	fs.Var(mv, "sort", "path:literal (repeatable)")
+	fs.Var(mv, "stream", "path:literal (repeatable)")
 	fs.Usage = func() { printUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return cfg, false, err
@@ -142,19 +152,38 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 			return cfg, false, err
 		}
 	}
-	seen := map[string]bool{}
-	for _, raw := range rawSort {
+	for _, raw := range rawStreams {
 		r, err := sorter.ParseRule(raw)
 		if err != nil {
 			return cfg, false, err
 		}
-		if seen[r.Path] {
-			return cfg, false, fmt.Errorf("duplicate sort path %q", r.Path)
-		}
-		seen[r.Path] = true
-		cfg.Sort = append(cfg.Sort, r)
+		cfg.Streams = append(cfg.Streams, r)
 	}
 	return cfg, false, nil
+}
+
+func parseCodes(value string) ([]int, error) {
+	if value == "" {
+		return nil, errors.New("code list must not be empty")
+	}
+	seen := make(map[int]struct{})
+	codes := make([]int, 0)
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		code, err := strconv.Atoi(raw)
+		if err != nil || code < 100 || code > 599 {
+			return nil, fmt.Errorf("invalid HTTP status code %q: expected 100..599", raw)
+		}
+		if code == http.StatusOK {
+			continue
+		}
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+	}
+	return codes, nil
 }
 
 func printUsage(w io.Writer) {
@@ -162,7 +191,8 @@ func printUsage(w io.Writer) {
   -nf, --nofilter                 disable built-in filter
   -f, --filter REGEX              additional case-insensitive exclusion regexp
   -p, --port PORT                 listen port (default 4949)
-  -s, --sort PATH:LITERAL         repeatable HTTP body classifier
+  -s, --stream PATH:LITERAL       repeatable header/body classifier
+  -c, --code CODE,CODE            additional successful HTTP status codes
   -dns, --dns IP,IP,...           custom UDP DNS servers
   -expose, --expose               listen on 0.0.0.0
   -t, --threads N                 sorter workers (default 2000)

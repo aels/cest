@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"log"
 	"net"
@@ -24,6 +25,7 @@ import (
 	"github.com/aels/cest/internal/dnsresolver"
 	"github.com/aels/cest/internal/domain"
 	"github.com/aels/cest/internal/sorter"
+	"github.com/aels/cest/internal/tuning"
 	webhub "github.com/aels/cest/internal/web"
 )
 
@@ -72,6 +74,7 @@ func main() {
 		}
 		return
 	}
+	tuning.Apply(func(message string) { fmt.Fprintln(os.Stderr, message) })
 	if err := run(cfg); err != nil {
 		notifyParent("ERROR " + err.Error())
 		log.Printf("fatal: %v", err)
@@ -149,9 +152,14 @@ func run(cfg config.Config) error {
 		return err
 	}
 	defer listener.Close()
-	routes := make([]string, 0, len(cfg.Sort)+1)
-	for _, r := range cfg.Sort {
-		routes = append(routes, r.Path)
+	routes := make([]string, 0, len(cfg.Streams)+1)
+	seenRoutes := make(map[string]struct{}, len(cfg.Streams))
+	for _, stream := range cfg.Streams {
+		if _, exists := seenRoutes[stream.Path]; exists {
+			continue
+		}
+		seenRoutes[stream.Path] = struct{}{}
+		routes = append(routes, stream.Path)
 	}
 	hub, err := webhub.NewHub(routes, cfg.ClientBufferMB*1024*1024)
 	if err != nil {
@@ -165,7 +173,7 @@ func run(cfg config.Config) error {
 		return err
 	}
 
-	if len(cfg.Sort) > 0 {
+	if len(cfg.Streams) > 0 {
 		var servers []netip.Addr
 		if cfg.DNSServers != "" {
 			servers, err = dnsresolver.ParseServers(cfg.DNSServers)
@@ -179,7 +187,7 @@ func run(cfg config.Config) error {
 		}
 		resolver.StartRefresh(ctx)
 		defer resolver.Close()
-		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Sort, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Publish: func(path, name string) { hub.Publish(path, name) }})
+		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Streams, SuccessCodes: cfg.SuccessCodes, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Publish: func(path, name string) { hub.Publish(path, name) }})
 		if err != nil {
 			return err
 		}
@@ -303,7 +311,7 @@ func (a *app) updateStats() {
 		CT:      map[string]uint64{"active_logs": ct.Workers, "entries": ct.Entries, "parse_errors": ct.Malformed, "source_errors": ct.FetchErrors},
 		Domains: map[string]uint64{"extracted": a.dom.extracted.Load(), "invalid": a.dom.invalid.Load(), "builtin_filtered": a.dom.builtinFiltered.Load(), "custom_filtered": a.dom.customFiltered.Load(), "duplicates": a.dom.duplicates.Load(), "published_all": a.dom.published.Load()},
 		DNS:     map[string]uint64{"queries": rc.Queries.Load(), "errors": rc.Errors.Load(), "timeouts": rc.Timeouts.Load(), "truncated": rc.Truncated.Load(), "private_address_drops": ss.PrivateAddressDrops},
-		HTTP:    map[string]uint64{"http_200": ss.HTTP200, "https_200": ss.HTTPS200, "non_200": ss.Non200, "connect_errors": ss.ConnectErrors, "read_timeouts": ss.ReadTimeouts, "body_limit_hits": ss.BodyLimitHits},
+		HTTP:    map[string]uint64{"http_200": ss.HTTP200, "https_200": ss.HTTPS200, "http_additional_code_success": ss.HTTPAdditionalSuccess, "https_additional_code_success": ss.HTTPSAdditionalSuccess, "non_success_status": ss.Non200, "connect_errors": ss.ConnectErrors, "read_timeouts": ss.ReadTimeouts, "body_limit_hits": ss.BodyLimitHits},
 		Queues:  map[string]any{"sort_length": ss.QueueLength, "sort_capacity": ss.QueueCapacity, "sort_queue_dropped": ss.QueueDropped}, Routes: routes}
 	data, err := json.Marshal(s)
 	if err == nil {

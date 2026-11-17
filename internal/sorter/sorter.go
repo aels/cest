@@ -36,7 +36,7 @@ type Rule struct {
 func ParseRule(value string) (Rule, error) {
 	path, literal, ok := strings.Cut(value, ":")
 	if !ok || path == "" || literal == "" {
-		return Rule{}, errors.New("sorter: sort rule must be path:non-empty-literal")
+		return Rule{}, errors.New("sorter: stream rule must be path:non-empty-literal")
 	}
 	if path == "all" || path == "stats" || path[0] == '.' {
 		return Rule{}, fmt.Errorf("sorter: invalid or reserved path %q", path)
@@ -71,33 +71,38 @@ type Config struct {
 	Resolver        Resolver
 	DialContext     DialContextFunc
 	Publish         func(path, domain string)
+	SuccessCodes    []int // Additional successful HTTP statuses; 200 is always included.
 }
 
 // Counters are monotonic and safe for concurrent snapshots.
 type Counters struct {
-	DNSLookupErrors     atomic.Uint64
-	PrivateAddressDrops atomic.Uint64
-	HTTP200             atomic.Uint64
-	HTTPS200            atomic.Uint64
-	Non200              atomic.Uint64
-	ConnectErrors       atomic.Uint64
-	ReadTimeouts        atomic.Uint64
-	BodyLimitHits       atomic.Uint64
+	DNSLookupErrors        atomic.Uint64
+	PrivateAddressDrops    atomic.Uint64
+	HTTP200                atomic.Uint64
+	HTTPS200               atomic.Uint64
+	HTTPAdditionalSuccess  atomic.Uint64
+	HTTPSAdditionalSuccess atomic.Uint64
+	Non200                 atomic.Uint64
+	ConnectErrors          atomic.Uint64
+	ReadTimeouts           atomic.Uint64
+	BodyLimitHits          atomic.Uint64
 }
 
 // Stats is a point-in-time snapshot.
 type Stats struct {
-	DNSLookupErrors     uint64
-	PrivateAddressDrops uint64
-	HTTP200             uint64
-	HTTPS200            uint64
-	Non200              uint64
-	ConnectErrors       uint64
-	ReadTimeouts        uint64
-	BodyLimitHits       uint64
-	QueueLength         int
-	QueueCapacity       int
-	QueueDropped        uint64
+	DNSLookupErrors        uint64
+	PrivateAddressDrops    uint64
+	HTTP200                uint64
+	HTTPS200               uint64
+	HTTPAdditionalSuccess  uint64
+	HTTPSAdditionalSuccess uint64
+	Non200                 uint64
+	ConnectErrors          uint64
+	ReadTimeouts           uint64
+	BodyLimitHits          uint64
+	QueueLength            int
+	QueueCapacity          int
+	QueueDropped           uint64
 }
 
 // Sorter owns a fixed worker pool and an overwrite-oldest input queue.
@@ -143,16 +148,21 @@ func New(parent context.Context, cfg Config) (*Sorter, error) {
 	if cfg.Publish == nil {
 		return nil, errors.New("sorter: publish callback is required")
 	}
-	seen := make(map[string]struct{}, len(cfg.Rules))
 	for _, rule := range cfg.Rules {
-		parsed, err := ParseRule(rule.Path + ":" + rule.Literal)
-		if err != nil {
+		if _, err := ParseRule(rule.Path + ":" + rule.Literal); err != nil {
 			return nil, err
 		}
-		if _, exists := seen[parsed.Path]; exists {
-			return nil, fmt.Errorf("sorter: duplicate path %q", parsed.Path)
+	}
+	seenCodes := map[int]struct{}{200: {}}
+	for _, code := range cfg.SuccessCodes {
+		if code < 100 || code > 599 {
+			return nil, fmt.Errorf("sorter: invalid successful HTTP status %d", code)
 		}
-		seen[parsed.Path] = struct{}{}
+		seenCodes[code] = struct{}{}
+	}
+	cfg.SuccessCodes = cfg.SuccessCodes[:0]
+	for code := range seenCodes {
+		cfg.SuccessCodes = append(cfg.SuccessCodes, code)
 	}
 	if cfg.DialContext == nil {
 		d := &net.Dialer{Timeout: cfg.ConnectTimeout}
@@ -201,7 +211,8 @@ func (s *Sorter) Counters() *Counters { return &s.counters }
 func (s *Sorter) Stats() Stats {
 	return Stats{
 		DNSLookupErrors: s.counters.DNSLookupErrors.Load(), PrivateAddressDrops: s.counters.PrivateAddressDrops.Load(),
-		HTTP200: s.counters.HTTP200.Load(), HTTPS200: s.counters.HTTPS200.Load(), Non200: s.counters.Non200.Load(),
+		HTTP200: s.counters.HTTP200.Load(), HTTPS200: s.counters.HTTPS200.Load(),
+		HTTPAdditionalSuccess: s.counters.HTTPAdditionalSuccess.Load(), HTTPSAdditionalSuccess: s.counters.HTTPSAdditionalSuccess.Load(), Non200: s.counters.Non200.Load(),
 		ConnectErrors: s.counters.ConnectErrors.Load(), ReadTimeouts: s.counters.ReadTimeouts.Load(), BodyLimitHits: s.counters.BodyLimitHits.Load(),
 		QueueLength: s.queue.Len(), QueueCapacity: s.queue.Capacity(), QueueDropped: s.queue.Dropped(),
 	}
@@ -217,16 +228,21 @@ func (s *Sorter) process(domain string) {
 		s.counters.PrivateAddressDrops.Add(1)
 		return
 	}
-	body, ok := s.request(domain, ip, false)
+	response, ok := s.request(domain, ip, false)
 	if !ok {
-		body, ok = s.request(domain, ip, true)
+		response, ok = s.request(domain, ip, true)
 	}
 	if !ok {
 		return
 	}
+	matchedPaths := make(map[string]struct{})
 	for _, rule := range s.cfg.Rules {
-		if bytes.Contains(body, []byte(rule.Literal)) {
-			s.cfg.Publish(rule.Path, domain)
+		needle := []byte(rule.Literal)
+		if bytes.Contains(response.body, needle) || headerContains(response.header, rule.Literal) {
+			matchedPaths[rule.Path] = struct{}{}
 		}
+	}
+	for path := range matchedPaths {
+		s.cfg.Publish(path, domain)
 	}
 }

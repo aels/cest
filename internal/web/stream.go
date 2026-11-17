@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"errors"
+	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,7 +18,7 @@ import (
 const (
 	maxBatch       = 100
 	websocketLimit = 512
-	ioDeadline     = time.Minute
+	writeTimeout   = time.Minute
 )
 
 var routeNameRE = regexp.MustCompile(`^[a-z0-9_-][a-z0-9_.-]*$`)
@@ -227,6 +229,21 @@ func (h *Hub) serveWebSocket(name string, w http.ResponseWriter, request *http.R
 	if err != nil {
 		return
 	}
+	// Upgraded connections are receive-only from the client's perspective:
+	// TCP probes detect dead peers without requiring application-level Pong.
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return
+	}
+	if tcp, ok := conn.NetConn().(interface {
+		SetKeepAliveConfig(net.KeepAliveConfig) error
+	}); ok {
+		if err := tcp.SetKeepAliveConfig(net.KeepAliveConfig{
+			Enable: true, Idle: time.Minute, Interval: 15 * time.Second, Count: 4,
+		}); err != nil {
+			log.Printf("websocket TCP keepalive: %v", err)
+		}
+	}
 	client := &streamClient{conn: conn, queue: NewClientQueue(h.clientBytes), batchLimit: routeBatchLimit(name), done: make(chan struct{})}
 	r := h.routes[name]
 	r.mu.Lock()
@@ -265,7 +282,7 @@ func (h *Hub) writeClient(client *streamClient, remove func()) {
 				if len(batch) == 0 {
 					break
 				}
-				_ = client.conn.SetWriteDeadline(time.Now().Add(ioDeadline))
+				_ = client.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 				if err := client.conn.WriteMessage(websocket.TextMessage, []byte(strings.Join(batch, "\n"))); err != nil {
 					return
 				}
@@ -277,7 +294,7 @@ func (h *Hub) writeClient(client *streamClient, remove func()) {
 func (h *Hub) readClient(client *streamClient, remove func()) {
 	defer remove()
 	client.conn.SetReadLimit(websocketLimit)
-	_ = client.conn.SetReadDeadline(time.Now().Add(ioDeadline))
+
 	for {
 		if _, _, err := client.conn.ReadMessage(); err != nil {
 			return

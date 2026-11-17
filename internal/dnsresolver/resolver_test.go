@@ -5,11 +5,12 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAutomaticConfigurationFormat(t *testing.T) {
-	if len(AutomaticServers) != 25 {
-		t.Fatalf("got %d automatic servers, want 25", len(AutomaticServers))
+	if len(AutomaticServers) != 60 {
+		t.Fatalf("got %d automatic servers, want 60", len(AutomaticServers))
 	}
 	seen := map[netip.Addr]bool{}
 	for _, s := range AutomaticServers {
@@ -32,6 +33,35 @@ func TestAutomaticConfigurationFormat(t *testing.T) {
 		if _, err := netip.ParseAddr(name); err == nil {
 			t.Errorf("benchmark hostname must not be an IP: %q", name)
 		}
+	}
+}
+
+func TestSelectPool(t *testing.T) {
+	scores := make([]benchmarkScore, 0, 61)
+	for i, raw := range AutomaticServers {
+		scores = append(scores, benchmarkScore{netip.MustParseAddr(raw), 3, time.Duration(i+1) * time.Millisecond})
+	}
+	// A fast but unreliable server must rank behind every fully successful one.
+	scores[0].successes = 1
+	scores = append(scores, benchmarkScore{netip.MustParseAddr("203.0.113.1"), 0, 0})
+	pool := selectPool(scores)
+	if len(pool) != 20 {
+		t.Fatalf("pool size = %d, want 20", len(pool))
+	}
+	for i, ip := range pool {
+		if ip != netip.MustParseAddr(AutomaticServers[i+1]) {
+			t.Fatalf("pool[%d] = %v", i, ip)
+		}
+	}
+	pool = selectPool([]benchmarkScore{
+		{netip.MustParseAddr("1.1.1.1"), 1, time.Millisecond},
+		{netip.MustParseAddr("8.8.8.8"), 0, 0},
+	})
+	if len(pool) != 1 || pool[0].String() != "1.1.1.1" {
+		t.Fatalf("partial pool = %v", pool)
+	}
+	if pool := selectPool(nil); len(pool) != 0 {
+		t.Fatalf("empty pool = %v", pool)
 	}
 }
 

@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	maxCNAMEs      = 3
-	maxPacketSize  = 4096
-	defaultTimeout = time.Second
+	maxCNAMEs         = 3
+	maxPacketSize     = 4096
+	defaultTimeout    = time.Second
+	automaticPoolSize = 20
 )
 
 var (
@@ -30,6 +31,23 @@ var (
 		"76.76.2.0", "76.76.10.0", "185.228.168.9", "185.228.169.9", "64.6.64.6",
 		"64.6.65.6", "77.88.8.8", "77.88.8.1", "156.154.70.1", "156.154.71.1",
 		"195.46.39.39", "195.46.39.40", "84.200.69.80", "84.200.70.40", "45.90.28.0",
+		// Additional public endpoints, including providers' filtering variants.
+		"1.1.1.2", "1.0.0.2", "1.1.1.3", "1.0.0.3", // Cloudflare Families
+		"9.9.9.10", "149.112.112.10", "9.9.9.11", "149.112.112.11", // Quad9
+		"94.140.14.140", "94.140.14.141", "94.140.14.15", "94.140.15.16", // AdGuard
+		"45.90.30.0",                // NextDNS
+		"8.26.56.26", "8.20.247.20", // Comodo
+		"74.82.42.42",                    // Hurricane Electric
+		"185.222.222.222", "45.11.45.11", // DNS.SB
+		"86.54.11.100", "86.54.11.200", // DNS4EU unfiltered
+		"95.85.95.85", "2.56.220.2", // Gcore
+		"223.5.5.5", "223.6.6.6", // AliDNS
+		"119.29.29.29", "182.254.116.116", // DNSPod
+		"101.101.101.101", "101.102.103.104", // Quad101
+		"114.114.114.114", "114.114.115.115", // 114DNS
+		"180.76.76.76",         // Baidu
+		"1.2.4.8", "210.2.4.8", // CNNIC SDNS
+		"208.67.222.220", "208.67.220.222", // OpenDNS alternate endpoints
 	}
 	// BenchmarkHostnames are stable public names used to measure recursive resolution.
 	BenchmarkHostnames = []string{"example.com", "iana.org", "cloudflare.com"}
@@ -233,19 +251,14 @@ func randomID() (uint16, error) {
 }
 func isTimeout(err error) bool { var ne net.Error; return errors.As(err, &ne) && ne.Timeout() }
 
-// Refresh benchmarks the automatic candidates and atomically installs up to ten best servers.
+// Refresh benchmarks the automatic candidates and atomically installs up to twenty best servers.
 func (r *Resolver) Refresh(ctx context.Context) error {
 	if r.custom {
 		return nil
 	}
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()
-	type score struct {
-		ip        netip.Addr
-		successes int
-		median    time.Duration
-	}
-	scores := make([]score, 0, len(AutomaticServers))
+	scores := make([]benchmarkScore, 0, len(AutomaticServers))
 	for _, raw := range AutomaticServers {
 		ip := netip.MustParseAddr(raw)
 		times := make([]time.Duration, 0, len(BenchmarkHostnames))
@@ -282,22 +295,10 @@ func (r *Resolver) Refresh(ctx context.Context) error {
 		}
 		if len(times) > 0 {
 			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
-			scores = append(scores, score{ip, len(times), times[len(times)/2]})
+			scores = append(scores, benchmarkScore{ip, len(times), times[len(times)/2]})
 		}
 	}
-	sort.SliceStable(scores, func(i, j int) bool {
-		if scores[i].successes != scores[j].successes {
-			return scores[i].successes > scores[j].successes
-		}
-		return scores[i].median < scores[j].median
-	})
-	if len(scores) > 10 {
-		scores = scores[:10]
-	}
-	pool := make([]netip.Addr, len(scores))
-	for i := range scores {
-		pool[i] = scores[i].ip
-	}
+	pool := selectPool(scores)
 	r.pool.Store(pool)
 	if r.hooks.PoolChanged != nil {
 		r.hooks.PoolChanged(append([]netip.Addr(nil), pool...))
@@ -306,6 +307,36 @@ func (r *Resolver) Refresh(ctx context.Context) error {
 		return ErrNoServers
 	}
 	return nil
+}
+
+type benchmarkScore struct {
+	ip        netip.Addr
+	successes int
+	median    time.Duration
+}
+
+func selectPool(scores []benchmarkScore) []netip.Addr {
+	eligible := scores[:0]
+	for _, score := range scores {
+		if score.successes > 0 {
+			eligible = append(eligible, score)
+		}
+	}
+	scores = eligible
+	sort.SliceStable(scores, func(i, j int) bool {
+		if scores[i].successes != scores[j].successes {
+			return scores[i].successes > scores[j].successes
+		}
+		return scores[i].median < scores[j].median
+	})
+	if len(scores) > automaticPoolSize {
+		scores = scores[:automaticPoolSize]
+	}
+	pool := make([]netip.Addr, len(scores))
+	for i := range scores {
+		pool[i] = scores[i].ip
+	}
+	return pool
 }
 
 // StartRefresh performs an immediate benchmark and refreshes hourly. While no server works it retries every three seconds.
