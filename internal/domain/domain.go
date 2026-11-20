@@ -173,17 +173,54 @@ func Normalize(name string) (string, error) {
 	return ascii, nil
 }
 
+// builtInPattern is the authoritative specification of the built-in deny rule,
+// kept for documentation and cross-checked against builtInNeedles in tests. It
+// is not compiled at runtime; matchBuiltIn performs the equivalent, much cheaper
+// case-insensitive substring search.
 const builtInPattern = `\.(google|googleapis|amazon|amazonaws|microsoft|azure|cloudflare|akamai|fastly|github|facebook|apple|netflix|shopify|squarespace|wix|godaddy|wordpress\.com|herokuapp|vercel|netlify|pages\.dev|firebaseapp|cloudfront|letsencrypt|sectigo|digicert|globalsign|comodo|verisign|gov|edu|mil)|workers\.dev|quickconnect\.(to|cn)|icdn\.ru|aws\.dev|\.on\.aws|netcraze\.io|mybluehost\.me|sslip\.io|nip\.io|amplifyapp\.com|platformsh\.site|zendesk\.com|synology\.me|remotewd\.com|meraki\.direct|duckdns\.org|plesk\.page|workdaysuv|website-k\.com|technology2022\.com|altervista\.org|haplorrhini\.com|tunwg\.com|towerbrands\.asia|dpdns\.org|certsbridge\.com|myvolumio\.org|ui\.direct|mybluelantern\.com|sovcloud-core\.fr|hstgr\.cloud|myftpupload\.com|xmit\.dev|mywhc\.ca|sub-site\.eu|endl\.site|hostclusters\.com|server-he\.de|rakkoserver\.net|optum\.com|a2z\.eu|wholesale-nondurable\.org|trucking-warehousing\.org|ciscosecureaccess|sourcemanager\.dev|cpanel\.site|traefik\.me|stratoserver\.net|ts\.net|ccwu\.cc|battery\.cam|servi\.tn|testsoftwares\.site|uhc\.com|flowww\.net|luckysrv\.de|ccaiplatform\.com|skalator\.de|judikamuhoki|freedomsoftsites\.com|ekalamfoundation\.com|gaymonrealtygroup\.com|adison\.co|jnj\.com|pustekno\.id|verify-recruit\.work|beatplugs\.com|texastopn\.top|whm\.`
 
+// builtInNeedles is the set of case-insensitive substrings equivalent to
+// builtInPattern. The regexp is an unanchored alternation, so each alternative
+// reduces to a substring test. Group members prefixed with "." come from the
+// leading `\.` in the pattern's first alternation. Equivalence with
+// builtInPattern is verified by a randomized cross-check test.
+var builtInNeedles = []string{
+	".google", ".googleapis", ".amazon", ".amazonaws", ".microsoft", ".azure",
+	".cloudflare", ".akamai", ".fastly", ".github", ".facebook", ".apple",
+	".netflix", ".shopify", ".squarespace", ".wix", ".godaddy", ".wordpress.com",
+	".herokuapp", ".vercel", ".netlify", ".pages.dev", ".firebaseapp",
+	".cloudfront", ".letsencrypt", ".sectigo", ".digicert", ".globalsign",
+	".comodo", ".verisign", ".gov", ".edu", ".mil",
+	"workers.dev", "quickconnect.to", "quickconnect.cn", "icdn.ru", "aws.dev",
+	".on.aws", "netcraze.io", "mybluehost.me", "sslip.io", "nip.io",
+	"amplifyapp.com", "platformsh.site", "zendesk.com", "synology.me",
+	"remotewd.com", "meraki.direct", "duckdns.org", "plesk.page", "workdaysuv",
+	"website-k.com", "technology2022.com", "altervista.org", "haplorrhini.com",
+	"tunwg.com", "towerbrands.asia", "dpdns.org", "certsbridge.com",
+	"myvolumio.org", "ui.direct", "mybluelantern.com", "sovcloud-core.fr",
+	"hstgr.cloud", "myftpupload.com", "xmit.dev", "mywhc.ca", "sub-site.eu",
+	"endl.site", "hostclusters.com", "server-he.de", "rakkoserver.net",
+	"optum.com", "a2z.eu", "wholesale-nondurable.org", "trucking-warehousing.org",
+	"ciscosecureaccess", "sourcemanager.dev", "cpanel.site", "traefik.me",
+	"stratoserver.net", "ts.net", "ccwu.cc", "battery.cam", "servi.tn",
+	"testsoftwares.site", "uhc.com", "flowww.net", "luckysrv.de",
+	"ccaiplatform.com", "skalator.de", "judikamuhoki", "freedomsoftsites.com",
+	"ekalamfoundation.com", "gaymonrealtygroup.com", "adison.co", "jnj.com",
+	"pustekno.id", "verify-recruit.work", "beatplugs.com", "texastopn.top", "whm.",
+}
+
 // Filter applies the built-in deny rule and an optional custom regexp.
-type Filter struct{ builtIn, custom *regexp.Regexp }
+type Filter struct {
+	builtIn []string
+	custom  *regexp.Regexp
+}
 
 // NewFilter constructs a filter. noBuiltIn implements --nofilter semantics;
 // custom remains active and is always compiled case-insensitively.
 func NewFilter(noBuiltIn bool, custom string) (*Filter, error) {
 	f := &Filter{}
 	if !noBuiltIn {
-		f.builtIn = regexp.MustCompile(`(?i:` + builtInPattern + `)`)
+		f.builtIn = builtInNeedles
 	}
 	if custom != "" {
 		r, err := regexp.Compile(`(?i:` + custom + `)`)
@@ -195,12 +232,25 @@ func NewFilter(noBuiltIn bool, custom string) (*Filter, error) {
 	return f, nil
 }
 
+// matchBuiltIn reports whether name contains any built-in deny substring,
+// case-insensitively. Normalized input is already lowercase, so ToLower returns
+// it without allocating.
+func matchBuiltIn(needles []string, name string) bool {
+	s := strings.ToLower(name)
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
+}
+
 // Match reports which filters exclude a normalized full domain.
 func (f *Filter) Match(name string) (builtIn, custom bool) {
 	if f == nil {
 		return false, false
 	}
-	return f.builtIn != nil && f.builtIn.MatchString(name), f.custom != nil && f.custom.MatchString(name)
+	return f.builtIn != nil && matchBuiltIn(f.builtIn, name), f.custom != nil && f.custom.MatchString(name)
 }
 
 // Excluded reports whether a normalized full domain matches either active rule.
