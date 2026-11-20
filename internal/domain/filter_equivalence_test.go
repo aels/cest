@@ -17,7 +17,7 @@ func authoritativeBuiltIn(t *testing.T) *regexp.Regexp {
 func TestBuiltInNeedlesMatchRegexp(t *testing.T) {
 	re := authoritativeBuiltIn(t)
 	check := func(s string) {
-		if got, want := matchBuiltIn(builtInNeedles, s), re.MatchString(s); got != want {
+		if got, want := matchBuiltIn(builtInNeedles, builtInLabelNeedles, s), re.MatchString(s); got != want {
 			t.Fatalf("mismatch for %q: needles=%v regexp=%v", s, got, want)
 		}
 	}
@@ -29,6 +29,13 @@ func TestBuiltInNeedlesMatchRegexp(t *testing.T) {
 	for _, n := range builtInNeedles {
 		fragments = append(fragments, strings.TrimPrefix(n, "."))
 	}
+	// Explicit label-boundary cases for edu/gov/mil (whole-label semantics).
+	fragments = append(fragments,
+		"edu", "gov", "mil", ".edu", ".gov", ".mil", ".edu.", ".gov.", ".mil.",
+		"harvard.edu", "mit.edu.tr", "edu.example.com", "foo.education.com",
+		"x.edutech.io", "army.mil", "shop.milano.it", "the.milk.com",
+		"my.government.example", "portal.gov.uk", "governance.io",
+	)
 	affixes := []string{"", "a", "x.", ".", "123", "sub", ".com", "-", "GOV", "ExAmPle"}
 	for _, f := range fragments {
 		for _, pre := range affixes {
@@ -49,8 +56,10 @@ func TestBuiltInNeedlesMatchRegexp(t *testing.T) {
 			b.WriteRune(alphabet[rng.Intn(len(alphabet))])
 		}
 		s := b.String()
-		if rng.Intn(3) == 0 && len(builtInNeedles) > 0 {
-			needle := builtInNeedles[rng.Intn(len(builtInNeedles))]
+		if rng.Intn(3) == 0 {
+			// Inject substring and label needles (the latter with varied boundaries).
+			inject := append(append([]string(nil), builtInNeedles...), ".edu", ".gov", ".mil", ".edu.", "edu", "gov.", "mil")
+			needle := inject[rng.Intn(len(inject))]
 			pos := 0
 			if len(s) > 0 {
 				pos = rng.Intn(len(s) + 1)

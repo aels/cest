@@ -177,7 +177,7 @@ func Normalize(name string) (string, error) {
 // kept for documentation and cross-checked against builtInNeedles in tests. It
 // is not compiled at runtime; matchBuiltIn performs the equivalent, much cheaper
 // case-insensitive substring search.
-const builtInPattern = `\.(google|googleapis|amazon|amazonaws|microsoft|azure|cloudflare|akamai|fastly|github|facebook|apple|netflix|shopify|squarespace|wix|godaddy|wordpress\.com|herokuapp|vercel|netlify|pages\.dev|firebaseapp|cloudfront|letsencrypt|sectigo|digicert|globalsign|comodo|verisign|gov|edu|mil)|workers\.dev|quickconnect\.(to|cn)|icdn\.ru|aws\.dev|\.on\.aws|netcraze\.io|mybluehost\.me|sslip\.io|nip\.io|amplifyapp\.com|platformsh\.site|zendesk\.com|synology\.me|remotewd\.com|meraki\.direct|duckdns\.org|plesk\.page|workdaysuv|website-k\.com|technology2022\.com|altervista\.org|haplorrhini\.com|tunwg\.com|towerbrands\.asia|dpdns\.org|certsbridge\.com|myvolumio\.org|ui\.direct|mybluelantern\.com|sovcloud-core\.fr|hstgr\.cloud|myftpupload\.com|xmit\.dev|mywhc\.ca|sub-site\.eu|endl\.site|hostclusters\.com|server-he\.de|rakkoserver\.net|optum\.com|a2z\.eu|wholesale-nondurable\.org|trucking-warehousing\.org|ciscosecureaccess|sourcemanager\.dev|cpanel\.site|traefik\.me|stratoserver\.net|ts\.net|ccwu\.cc|battery\.cam|servi\.tn|testsoftwares\.site|uhc\.com|flowww\.net|luckysrv\.de|ccaiplatform\.com|skalator\.de|judikamuhoki|freedomsoftsites\.com|ekalamfoundation\.com|gaymonrealtygroup\.com|adison\.co|jnj\.com|pustekno\.id|verify-recruit\.work|beatplugs\.com|texastopn\.top|whm\.`
+const builtInPattern = `\.(google|googleapis|amazon|amazonaws|microsoft|azure|cloudflare|akamai|fastly|github|facebook|apple|netflix|shopify|squarespace|wix|godaddy|wordpress\.com|herokuapp|vercel|netlify|pages\.dev|firebaseapp|cloudfront|letsencrypt|sectigo|digicert|globalsign|comodo|verisign)|\.(edu|gov|mil)(\.|$)|workers\.dev|quickconnect\.(to|cn)|icdn\.ru|aws\.dev|\.on\.aws|netcraze\.io|mybluehost\.me|sslip\.io|nip\.io|amplifyapp\.com|platformsh\.site|zendesk\.com|synology\.me|remotewd\.com|meraki\.direct|duckdns\.org|plesk\.page|workdaysuv|website-k\.com|technology2022\.com|altervista\.org|haplorrhini\.com|tunwg\.com|towerbrands\.asia|dpdns\.org|certsbridge\.com|myvolumio\.org|ui\.direct|mybluelantern\.com|sovcloud-core\.fr|hstgr\.cloud|myftpupload\.com|xmit\.dev|mywhc\.ca|sub-site\.eu|endl\.site|hostclusters\.com|server-he\.de|rakkoserver\.net|optum\.com|a2z\.eu|wholesale-nondurable\.org|trucking-warehousing\.org|ciscosecureaccess|sourcemanager\.dev|cpanel\.site|traefik\.me|stratoserver\.net|ts\.net|ccwu\.cc|battery\.cam|servi\.tn|testsoftwares\.site|uhc\.com|flowww\.net|luckysrv\.de|ccaiplatform\.com|skalator\.de|judikamuhoki|freedomsoftsites\.com|ekalamfoundation\.com|gaymonrealtygroup\.com|adison\.co|jnj\.com|pustekno\.id|verify-recruit\.work|beatplugs\.com|texastopn\.top|whm\.`
 
 // builtInNeedles is the set of case-insensitive substrings equivalent to
 // builtInPattern. The regexp is an unanchored alternation, so each alternative
@@ -190,7 +190,7 @@ var builtInNeedles = []string{
 	".netflix", ".shopify", ".squarespace", ".wix", ".godaddy", ".wordpress.com",
 	".herokuapp", ".vercel", ".netlify", ".pages.dev", ".firebaseapp",
 	".cloudfront", ".letsencrypt", ".sectigo", ".digicert", ".globalsign",
-	".comodo", ".verisign", ".gov", ".edu", ".mil",
+	".comodo", ".verisign",
 	"workers.dev", "quickconnect.to", "quickconnect.cn", "icdn.ru", "aws.dev",
 	".on.aws", "netcraze.io", "mybluehost.me", "sslip.io", "nip.io",
 	"amplifyapp.com", "platformsh.site", "zendesk.com", "synology.me",
@@ -209,9 +209,16 @@ var builtInNeedles = []string{
 	"pustekno.id", "verify-recruit.work", "beatplugs.com", "texastopn.top", "whm.",
 }
 
+// builtInLabelNeedles are denied only when they appear as a whole DNS label that
+// is not the first label: the domain ends with ".<needle>" or contains
+// ".<needle>.". This avoids matching unrelated names such as "education",
+// "government", or "milano".
+var builtInLabelNeedles = []string{"edu", "gov", "mil"}
+
 // Filter applies the built-in deny rule and an optional custom regexp.
 type Filter struct {
 	builtIn []string
+	labels  []string
 	custom  *regexp.Regexp
 }
 
@@ -221,6 +228,7 @@ func NewFilter(noBuiltIn bool, custom string) (*Filter, error) {
 	f := &Filter{}
 	if !noBuiltIn {
 		f.builtIn = builtInNeedles
+		f.labels = builtInLabelNeedles
 	}
 	if custom != "" {
 		r, err := regexp.Compile(`(?i:` + custom + `)`)
@@ -232,17 +240,40 @@ func NewFilter(noBuiltIn bool, custom string) (*Filter, error) {
 	return f, nil
 }
 
-// matchBuiltIn reports whether name contains any built-in deny substring,
+// matchBuiltIn reports whether name matches any built-in deny rule,
 // case-insensitively. Normalized input is already lowercase, so ToLower returns
-// it without allocating.
-func matchBuiltIn(needles []string, name string) bool {
+// it without allocating. Plain needles use a substring test; label needles must
+// appear as a whole, non-leading DNS label.
+func matchBuiltIn(needles, labels []string, name string) bool {
 	s := strings.ToLower(name)
 	for _, n := range needles {
 		if strings.Contains(s, n) {
 			return true
 		}
 	}
+	for _, l := range labels {
+		if matchLabel(s, l) {
+			return true
+		}
+	}
 	return false
+}
+
+// matchLabel reports whether s contains ".<label>" immediately followed by a dot
+// or the end of string, i.e. label is a whole DNS label preceded by another.
+func matchLabel(s, label string) bool {
+	needle := "." + label
+	for from := 0; ; {
+		i := strings.Index(s[from:], needle)
+		if i < 0 {
+			return false
+		}
+		end := from + i + len(needle)
+		if end == len(s) || s[end] == '.' {
+			return true
+		}
+		from += i + 1
+	}
 }
 
 // Match reports which filters exclude a normalized full domain.
@@ -250,7 +281,7 @@ func (f *Filter) Match(name string) (builtIn, custom bool) {
 	if f == nil {
 		return false, false
 	}
-	return f.builtIn != nil && matchBuiltIn(f.builtIn, name), f.custom != nil && f.custom.MatchString(name)
+	return f.builtIn != nil && matchBuiltIn(f.builtIn, f.labels, name), f.custom != nil && f.custom.MatchString(name)
 }
 
 // Excluded reports whether a normalized full domain matches either active rule.
