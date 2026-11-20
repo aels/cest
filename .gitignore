@@ -4,6 +4,9 @@
 *.test
 *.prof
 
+# Local specification (not published)
+/t3.txt
+
 # Editors and OS
 .DS_Store
 .idea/
