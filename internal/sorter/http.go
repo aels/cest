@@ -1,6 +1,7 @@
 package sorter
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
@@ -9,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"strings"
 )
 
 // UserAgent is intentionally centralized so releases can update it easily.
@@ -20,26 +20,71 @@ type responseData struct {
 	header http.Header
 }
 
+// dialTarget carries the already-resolved, validated destination for a request.
+// It is passed via the request context so one shared transport can serve every
+// domain without re-resolving or rebuilding per-request transports.
+type dialTarget struct {
+	ip         netip.Addr
+	serverName string
+}
+
+type dialTargetKey struct{}
+
+// initHTTP builds the single transport and client reused by all workers.
+// Keep-alives stay disabled, but the transport object itself is shared to avoid
+// per-request allocation. Per-request IP and TLS ServerName are read from the
+// request context.
+func (s *Sorter) initHTTP() {
+	s.transport = &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			target, _ := ctx.Value(dialTargetKey{}).(dialTarget)
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			dialCtx, cancel := context.WithTimeout(ctx, s.cfg.ConnectTimeout)
+			defer cancel()
+			return s.cfg.DialContext(dialCtx, "tcp4", net.JoinHostPort(target.ip.String(), port))
+		},
+		DialTLSContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			target, _ := ctx.Value(dialTargetKey{}).(dialTarget)
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			dialCtx, cancel := context.WithTimeout(ctx, s.cfg.ConnectTimeout)
+			raw, err := s.cfg.DialContext(dialCtx, "tcp4", net.JoinHostPort(target.ip.String(), port))
+			cancel()
+			if err != nil {
+				return nil, err
+			}
+			// Sorting intentionally accepts any certificate; SNI is still the domain.
+			tlsConn := tls.Client(raw, &tls.Config{ServerName: target.serverName, InsecureSkipVerify: true})
+			hsCtx, hsCancel := context.WithTimeout(ctx, s.cfg.ConnectTimeout)
+			defer hsCancel()
+			if err := tlsConn.HandshakeContext(hsCtx); err != nil {
+				_ = raw.Close()
+				return nil, err
+			}
+			return tlsConn, nil
+		},
+	}
+	s.client = &http.Client{
+		Transport:     s.transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
 func (s *Sorter) request(domain string, ip netip.Addr, https bool) (responseData, bool) {
 	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.ResponseTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, dialTargetKey{}, dialTarget{ip: ip, serverName: domain})
 
-	scheme, port := "http", "80"
+	scheme := "http"
 	if https {
-		scheme, port = "https", "443"
+		scheme = "https"
 	}
-	address := net.JoinHostPort(ip.String(), port)
-	transport := &http.Transport{
-		DisableKeepAlives: true,
-		TLSClientConfig:   &tls.Config{ServerName: domain, InsecureSkipVerify: true}, // Sorting intentionally accepts any certificate.
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			dialCtx, dialCancel := context.WithTimeout(ctx, s.cfg.ConnectTimeout)
-			defer dialCancel()
-			return s.cfg.DialContext(dialCtx, "tcp4", address)
-		},
-	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+domain+"/", nil)
 	if err != nil {
 		return responseData{}, false
@@ -49,7 +94,7 @@ func (s *Sorter) request(domain string, ip netip.Addr, https bool) (responseData
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Close = true
 
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		s.recordNetworkError(err)
 		return responseData{}, false
@@ -90,7 +135,9 @@ func (s *Sorter) request(domain string, ip netip.Addr, https bool) (responseData
 	} else {
 		s.counters.HTTPAdditionalSuccess.Add(1)
 	}
-	return responseData{body: body, header: resp.Header.Clone()}, true
+	// resp.Header is not mutated after the response is returned and keep-alives
+	// are disabled, so it is safe to reference without cloning.
+	return responseData{body: body, header: resp.Header}, true
 }
 
 func (s *Sorter) successCode(code int) bool {
@@ -102,18 +149,23 @@ func (s *Sorter) successCode(code int) bool {
 	return false
 }
 
-func headerContains(header http.Header, literal string) bool {
+// headerBlob renders the response headers as "Name: value\n" lines once, so a
+// single literal scan covers both header names, values, and their combined
+// "Name: value" form. Returns nil when there are no headers.
+func headerBlob(header http.Header) []byte {
+	if len(header) == 0 {
+		return nil
+	}
+	var b bytes.Buffer
 	for name, values := range header {
-		if strings.Contains(name, literal) {
-			return true
-		}
 		for _, value := range values {
-			if strings.Contains(value, literal) || strings.Contains(name+": "+value, literal) {
-				return true
-			}
+			b.WriteString(name)
+			b.WriteString(": ")
+			b.WriteString(value)
+			b.WriteByte('\n')
 		}
 	}
-	return false
+	return b.Bytes()
 }
 
 func (s *Sorter) recordNetworkError(err error) {

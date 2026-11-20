@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -227,43 +229,20 @@ func run(cfg config.Config) error {
 	log.Printf("cest %s listening on %s", config.Version, listener.Addr())
 
 	seen := dedup.New(100000)
-	go func() {
-		for entry := range application.ct.Entries() {
-			var names []string
-			var e error
-			if entry.IsTBS {
-				names, e = domain.ExtractTBSCertificate(entry.DER)
-			} else {
-				names, e = domain.ExtractCertificate(entry.DER)
+	// The CT entry stream is consumed by a pool so ASN.1 parsing and the shared
+	// compiled filter run across cores instead of a single goroutine. dedup, the
+	// filter, the hub, and the sorter are all safe for concurrent use.
+	entryWorkers := runtime.GOMAXPROCS(0)
+	var entryWG sync.WaitGroup
+	for i := 0; i < entryWorkers; i++ {
+		entryWG.Add(1)
+		go func() {
+			defer entryWG.Done()
+			for entry := range application.ct.Entries() {
+				application.handleEntry(entry, filter, seen, hub)
 			}
-			if e != nil {
-				application.dom.invalid.Add(1)
-				continue
-			}
-			application.dom.extracted.Add(uint64(len(names)))
-			for _, name := range names {
-				builtin, custom := filter.Match(name)
-				if builtin {
-					application.dom.builtinFiltered.Add(1)
-				}
-				if custom {
-					application.dom.customFiltered.Add(1)
-				}
-				if builtin || custom {
-					continue
-				}
-				if !seen.Add(name) {
-					application.dom.duplicates.Add(1)
-					continue
-				}
-				hub.PublishAll(name)
-				application.dom.published.Add(1)
-				if application.sorter != nil {
-					application.sorter.Submit(name)
-				}
-			}
-		}
-	}()
+		}()
+	}
 	application.updateStats()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -290,8 +269,47 @@ func run(cfg config.Config) error {
 	defer shutdownCancel()
 	_ = server.Shutdown(shutdownCtx)
 	_ = hub.Shutdown(shutdownCtx)
+	entryWG.Wait()
 	application.updateStats()
 	return nil
+}
+
+// handleEntry extracts, filters, deduplicates, and publishes one CT entry. It is
+// safe to call concurrently from multiple pipeline workers.
+func (a *app) handleEntry(entry ctstream.Entry, filter *domain.Filter, seen *dedup.FIFOSet, hub *webhub.Hub) {
+	var names []string
+	var err error
+	if entry.IsTBS {
+		names, err = domain.ExtractTBSCertificate(entry.DER)
+	} else {
+		names, err = domain.ExtractCertificate(entry.DER)
+	}
+	if err != nil {
+		a.dom.invalid.Add(1)
+		return
+	}
+	a.dom.extracted.Add(uint64(len(names)))
+	for _, name := range names {
+		builtin, custom := filter.Match(name)
+		if builtin {
+			a.dom.builtinFiltered.Add(1)
+		}
+		if custom {
+			a.dom.customFiltered.Add(1)
+		}
+		if builtin || custom {
+			continue
+		}
+		if !seen.Add(name) {
+			a.dom.duplicates.Add(1)
+			continue
+		}
+		hub.PublishAll(name)
+		a.dom.published.Add(1)
+		if a.sorter != nil {
+			a.sorter.Submit(name)
+		}
+	}
 }
 
 func (a *app) updateStats() {

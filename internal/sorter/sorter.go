@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
@@ -105,16 +106,26 @@ type Stats struct {
 	QueueDropped           uint64
 }
 
+// compiledRule is a precomputed stream rule. The literal is kept as bytes to
+// avoid per-response allocations while matching bodies and header blobs.
+type compiledRule struct {
+	path    string
+	literal []byte
+}
+
 // Sorter owns a fixed worker pool and an overwrite-oldest input queue.
 type Sorter struct {
-	cfg      Config
-	queue    *ring.SortQueue
-	counters Counters
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wake     chan struct{}
-	wg       sync.WaitGroup
-	close    sync.Once
+	cfg       Config
+	rules     []compiledRule
+	queue     *ring.SortQueue
+	counters  Counters
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wake      chan struct{}
+	wg        sync.WaitGroup
+	close     sync.Once
+	transport *http.Transport
+	client    *http.Client
 }
 
 func New(parent context.Context, cfg Config) (*Sorter, error) {
@@ -170,6 +181,11 @@ func New(parent context.Context, cfg Config) (*Sorter, error) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &Sorter{cfg: cfg, queue: ring.NewSortQueue(cfg.Threads), ctx: ctx, cancel: cancel, wake: make(chan struct{}, cfg.Threads)}
+	s.rules = make([]compiledRule, len(cfg.Rules))
+	for i, rule := range cfg.Rules {
+		s.rules[i] = compiledRule{path: rule.Path, literal: []byte(rule.Literal)}
+	}
+	s.initHTTP()
 	s.wg.Add(cfg.Threads)
 	for i := 0; i < cfg.Threads; i++ {
 		go s.worker()
@@ -205,7 +221,11 @@ func (s *Sorter) worker() {
 }
 
 // Close cancels in-flight work and waits for all workers.
-func (s *Sorter) Close() { s.close.Do(s.cancel); s.wg.Wait() }
+func (s *Sorter) Close() {
+	s.close.Do(s.cancel)
+	s.wg.Wait()
+	s.transport.CloseIdleConnections()
+}
 
 func (s *Sorter) Counters() *Counters { return &s.counters }
 func (s *Sorter) Stats() Stats {
@@ -235,14 +255,34 @@ func (s *Sorter) process(domain string) {
 	if !ok {
 		return
 	}
-	matchedPaths := make(map[string]struct{})
-	for _, rule := range s.cfg.Rules {
-		needle := []byte(rule.Literal)
-		if bytes.Contains(response.body, needle) || headerContains(response.header, rule.Literal) {
-			matchedPaths[rule.Path] = struct{}{}
-		}
-	}
-	for path := range matchedPaths {
+	for _, path := range s.match(response) {
 		s.cfg.Publish(path, domain)
 	}
+}
+
+// match returns the distinct stream paths whose literal appears in the response
+// body or header blob. It allocates the header blob once per response, never
+// once per rule, and deduplicates paths without a map.
+func (s *Sorter) match(response responseData) []string {
+	blob := headerBlob(response.header)
+	var matched []string
+	for i := range s.rules {
+		rule := &s.rules[i]
+		if containsPath(matched, rule.path) {
+			continue
+		}
+		if bytes.Contains(response.body, rule.literal) || bytes.Contains(blob, rule.literal) {
+			matched = append(matched, rule.path)
+		}
+	}
+	return matched
+}
+
+func containsPath(paths []string, path string) bool {
+	for _, p := range paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
 }
