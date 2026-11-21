@@ -26,7 +26,7 @@ The installed binary is placed in `$(go env GOPATH)/bin`. Make sure that directo
 
 > The cest is intentionally optimized for only one task: "give me only domains feed, fast". Selected high-overlap CT logs are denied, non-active logs are skipped, the default noise filter removes known high-volume domains, and an in-memory FIFO set keeps you from dupes. Use `--nofilter` to find out how deep a rabbit hole is.
 
-## Made for bug hunters, hackers & 0-day owners.
+## Made for researchers
 
 - **Reduce duplicate noise.** Wildcards are normalized and dupe domains are suppressed by a 100k FIFO set.
 - **Filter common trash by default.** The default filter removes most large cloud, hosting, CDN, and platform domains:
