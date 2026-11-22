@@ -21,6 +21,7 @@ const (
 	maxPacketSize     = 4096
 	defaultTimeout    = time.Second
 	automaticPoolSize = 20
+	defaultSockets    = 64
 )
 
 var (
@@ -55,6 +56,8 @@ var (
 	ErrNoServers = errors.New("dnsresolver: no DNS servers available")
 	ErrNoAddress = errors.New("dnsresolver: no A address")
 	ErrTruncated = errors.New("dnsresolver: truncated UDP response")
+	// ErrNXDomain is an authoritative negative answer. It is not retried.
+	ErrNXDomain = errors.New("dnsresolver: NXDOMAIN")
 )
 
 // Counters may be shared with an application's stats snapshot.
@@ -77,6 +80,9 @@ type Config struct {
 	Timeout  time.Duration
 	Counters *Counters
 	Hooks    Hooks
+	// Sockets is the maximum number of idle UDP sockets kept for reuse. Set it
+	// to the number of goroutines that resolve concurrently.
+	Sockets int
 }
 
 type Resolver struct {
@@ -84,10 +90,21 @@ type Resolver struct {
 	custom    bool
 	counters  *Counters
 	hooks     Hooks
-	pool      atomic.Value // []netip.Addr
+	pool      atomic.Value // []netip.Addr; a stored slice is never modified
 	next      atomic.Uint64
 	refreshMu sync.Mutex
 	cancel    context.CancelFunc
+	sockets   chan *udpSocket
+	closed    atomic.Bool
+	port      uint16 // always 53; tests override it
+}
+
+// udpSocket is an unconnected UDP socket with its own receive buffer. One
+// socket serves one query at a time and is reused for later queries to any
+// server, so a lookup does not open and close a socket.
+type udpSocket struct {
+	conn *net.UDPConn
+	buf  []byte
 }
 
 // ParseServers validates a comma-separated list of unique IPv4 literals.
@@ -125,7 +142,13 @@ func New(cfg Config) (*Resolver, error) {
 	if cfg.Counters == nil {
 		cfg.Counters = &Counters{}
 	}
-	r := &Resolver{timeout: cfg.Timeout, custom: len(cfg.Servers) > 0, counters: cfg.Counters, hooks: cfg.Hooks}
+	if cfg.Sockets < 0 {
+		return nil, errors.New("dnsresolver: socket pool size must not be negative")
+	}
+	if cfg.Sockets == 0 {
+		cfg.Sockets = defaultSockets
+	}
+	r := &Resolver{timeout: cfg.Timeout, custom: len(cfg.Servers) > 0, counters: cfg.Counters, hooks: cfg.Hooks, sockets: make(chan *udpSocket, cfg.Sockets), port: 53}
 	servers := append([]netip.Addr(nil), cfg.Servers...)
 	for _, ip := range servers {
 		if !ip.Is4() {
@@ -138,8 +161,14 @@ func New(cfg Config) (*Resolver, error) {
 
 // Servers returns a snapshot of the active round-robin pool.
 func (r *Resolver) Servers() []netip.Addr {
-	return append([]netip.Addr(nil), r.pool.Load().([]netip.Addr)...)
+	return append([]netip.Addr(nil), r.servers()...)
 }
+
+func (r *Resolver) servers() []netip.Addr { return r.pool.Load().([]netip.Addr) }
+
+// Ready reports whether the pool contains at least one server. With automatic
+// selection the pool is empty until the first benchmark finds a server.
+func (r *Resolver) Ready() bool { return len(r.servers()) > 0 }
 
 // LookupIPv4 resolves name and follows at most three CNAME transitions.
 func (r *Resolver) LookupIPv4(ctx context.Context, name string) (netip.Addr, error) {
@@ -168,7 +197,7 @@ func (r *Resolver) LookupIPv4(ctx context.Context, name string) (netip.Addr, err
 }
 
 func (r *Resolver) lookupOnce(ctx context.Context, name string) (parsedAnswer, error) {
-	servers := r.Servers()
+	servers := r.servers()
 	if len(servers) == 0 {
 		r.counters.Errors.Add(1)
 		return parsedAnswer{}, ErrNoServers
@@ -194,6 +223,9 @@ func (r *Resolver) lookupOnce(ctx context.Context, name string) (parsedAnswer, e
 			return ans, nil
 		}
 		last = err
+		if errors.Is(err, ErrNXDomain) {
+			break
+		}
 		if errors.Is(err, ErrTruncated) {
 			r.counters.Truncated.Add(1)
 		}
@@ -214,34 +246,68 @@ func (r *Resolver) exchange(ctx context.Context, server netip.Addr, name string)
 	if err != nil {
 		return parsedAnswer{}, err
 	}
-	d := net.Dialer{}
-	conn, err := d.DialContext(ctx, "udp4", net.JoinHostPort(server.String(), "53"))
+	if err = ctx.Err(); err != nil {
+		return parsedAnswer{}, err
+	}
+	sock, err := r.acquireSocket()
 	if err != nil {
 		return parsedAnswer{}, err
 	}
-	defer conn.Close()
+	// A socket stays reusable after a timeout: a late reply to this query is
+	// discarded later by the source, ID, and question checks below.
+	reusable := false
+	defer func() { r.releaseSocket(sock, reusable) }()
 	deadline := time.Now().Add(r.timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
-	if err = conn.SetDeadline(deadline); err != nil {
+	if err = sock.conn.SetDeadline(deadline); err != nil {
 		return parsedAnswer{}, err
 	}
-	if _, err = conn.Write(q); err != nil {
+	dst := netip.AddrPortFrom(server, r.port)
+	if _, err = sock.conn.WriteToUDPAddrPort(q, dst); err != nil {
 		return parsedAnswer{}, err
 	}
-	buf := make([]byte, maxPacketSize)
 	for {
-		n, err := conn.Read(buf)
+		n, from, err := sock.conn.ReadFromUDPAddrPort(sock.buf)
 		if err != nil {
+			reusable = isTimeout(err)
 			return parsedAnswer{}, err
 		}
-		ans, ignore, err := parseResponse(buf[:n], id, name)
+		if from.Addr().Unmap() != server || from.Port() != r.port {
+			continue
+		}
+		ans, ignore, err := parseResponse(sock.buf[:n], id, name)
 		if ignore {
 			continue
 		}
+		reusable = true
 		return ans, err
 	}
+}
+
+func (r *Resolver) acquireSocket() (*udpSocket, error) {
+	select {
+	case sock := <-r.sockets:
+		return sock, nil
+	default:
+	}
+	conn, err := net.ListenUDP("udp4", nil)
+	if err != nil {
+		return nil, err
+	}
+	return &udpSocket{conn: conn, buf: make([]byte, maxPacketSize)}, nil
+}
+
+func (r *Resolver) releaseSocket(sock *udpSocket, reusable bool) {
+	if reusable && !r.closed.Load() {
+		select {
+		case r.sockets <- sock:
+			return
+		default:
+		}
+	}
+	_ = sock.conn.Close()
 }
 
 func randomID() (uint16, error) {
@@ -251,53 +317,38 @@ func randomID() (uint16, error) {
 }
 func isTimeout(err error) bool { var ne net.Error; return errors.As(err, &ne) && ne.Timeout() }
 
-// Refresh benchmarks the automatic candidates and atomically installs up to twenty best servers.
+// Refresh benchmarks the automatic candidates and atomically installs up to
+// twenty best servers. All candidates are measured in parallel, so one
+// benchmark takes about len(BenchmarkHostnames) timeouts in the worst case.
 func (r *Resolver) Refresh(ctx context.Context) error {
 	if r.custom {
 		return nil
 	}
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()
-	scores := make([]benchmarkScore, 0, len(AutomaticServers))
-	for _, raw := range AutomaticServers {
-		ip := netip.MustParseAddr(raw)
-		times := make([]time.Duration, 0, len(BenchmarkHostnames))
-		for _, host := range BenchmarkHostnames {
-			began := time.Now()
-			id, _ := randomID()
-			q, _ := buildQuery(id, host)
-			d := net.Dialer{}
-			conn, err := d.DialContext(ctx, "udp4", net.JoinHostPort(ip.String(), "53"))
-			if err == nil {
-				deadline := time.Now().Add(r.timeout)
-				if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
-					deadline = dl
+	scores := make([]benchmarkScore, len(AutomaticServers))
+	var wg sync.WaitGroup
+	for i, raw := range AutomaticServers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ip := netip.MustParseAddr(raw)
+			times := make([]time.Duration, 0, len(BenchmarkHostnames))
+			for _, host := range BenchmarkHostnames {
+				began := time.Now()
+				if _, err := r.exchange(ctx, ip, host); err == nil {
+					times = append(times, time.Since(began))
 				}
-				_ = conn.SetDeadline(deadline)
-				if _, err = conn.Write(q); err == nil {
-					b := make([]byte, maxPacketSize)
-					var n int
-					n, err = conn.Read(b)
-					if err == nil {
-						_, ignore, pe := parseResponse(b[:n], id, host)
-						if ignore {
-							err = errors.New("mismatched response")
-						} else {
-							err = pe
-						}
-					}
-				}
-				_ = conn.Close()
 			}
-			if err == nil {
-				times = append(times, time.Since(began))
+			if len(times) > 0 {
+				sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+				scores[i] = benchmarkScore{ip, len(times), times[len(times)/2]}
 			}
-		}
-		if len(times) > 0 {
-			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
-			scores = append(scores, benchmarkScore{ip, len(times), times[len(times)/2]})
-		}
+		}()
 	}
+	wg.Wait()
+	// Candidates without a successful answer keep a zero score and are
+	// removed by selectPool.
 	pool := selectPool(scores)
 	r.pool.Store(pool)
 	if r.hooks.PoolChanged != nil {
@@ -370,5 +421,14 @@ func (r *Resolver) StartRefresh(ctx context.Context) {
 func (r *Resolver) Close() {
 	if r.cancel != nil {
 		r.cancel()
+	}
+	r.closed.Store(true)
+	for {
+		select {
+		case sock := <-r.sockets:
+			_ = sock.conn.Close()
+		default:
+			return
+		}
 	}
 }

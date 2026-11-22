@@ -26,6 +26,10 @@ const (
 	maxResponseBody   = 16 << 20
 	reconcileInterval = 24 * time.Hour
 	initialRetry      = 3 * time.Second
+	// defaultPartialTileDelay bounds the extra latency of Static CT entries that
+	// wait for their data tile to fill. Busy logs fill a tile faster than this,
+	// so they are read only as full tiles.
+	defaultPartialTileDelay = 20 * time.Second
 )
 
 // Entry is certificate material ready for internal/domain. IsTBS is false for
@@ -43,6 +47,9 @@ type Config struct {
 	OutputBuffer int
 	BatchSize    int
 	PollInterval time.Duration
+	// PartialTileDelay is how long pending entries of an incomplete Static CT
+	// data tile wait before the worker fetches the partial tile.
+	PartialTileDelay time.Duration
 }
 
 // Stats is a lock-free snapshot accumulated since Start.
@@ -102,6 +109,11 @@ func New(cfg Config) *Stream {
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
+	}
+	if cfg.PartialTileDelay < 0 {
+		cfg.PartialTileDelay = 0
+	} else if cfg.PartialTileDelay == 0 {
+		cfg.PartialTileDelay = defaultPartialTileDelay
 	}
 	return &Stream{cfg: cfg, entries: make(chan Entry, cfg.OutputBuffer), workers: make(map[string]*workerHandle)}
 }
@@ -293,12 +305,9 @@ func (s *Stream) getJSON(ctx context.Context, endpoint string, limit int64, dst 
 	if err != nil {
 		return err
 	}
-	dec := json.NewDecoder(strings.NewReader(string(body)))
-	if err := dec.Decode(dst); err != nil {
+	// json.Unmarshal also rejects trailing data after the top-level value.
+	if err := json.Unmarshal(body, dst); err != nil {
 		return fmt.Errorf("ctstream: decode %s: %w", endpoint, err)
-	}
-	if dec.Decode(&struct{}{}) != io.EOF {
-		return errors.New("ctstream: trailing JSON data")
 	}
 	return nil
 }

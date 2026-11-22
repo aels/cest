@@ -89,9 +89,9 @@ For each domain admitted to the HTTP classification pipeline, the application pe
 
 1. Publishes the domain to `/all` before classification.
 2. Resolves its IPv4 address using the integrated UDP DNS resolver.
-3. Issues `GET http://domain/` without following redirects.
+3. Issues `GET https://domain/` without following redirects.
 4. Accepts status `200` and any additional status codes specified by `--code`.
-5. Attempts `GET https://domain/` once if the HTTP attempt fails.
+5. Attempts `GET http://domain/` once if the HTTPS attempt fails.
 6. Searches the accepted response headers and body for the configured case-sensitive literals and publishes the domain to each matching stream path.
 
 ## Configuration examples
@@ -166,7 +166,7 @@ The server regenerates the cached JSON snapshot every five seconds. The snapshot
 
 - `ct.active_logs`, `ct.entries`, and `ct.source_errors`;
 - `domains.extracted`, `domains.duplicates`, and `domains.published_all`;
-- `dns.errors`, `dns.timeouts`, and `dns.private_address_drops`;
+- `dns.errors`, `dns.timeouts`, `dns.private_address_drops`, and `dns.not_ready_drops`;
 - `http.http_200`, `http.https_200`, `http.http_additional_code_success`, `http.https_additional_code_success`, `http.non_success_status`, and `http.read_timeouts`;
 - `queues.sort_queue_dropped`;
 - `routes.<name>.clients` and `routes.<name>.client_dropped`.
@@ -192,6 +192,8 @@ HTTP keep-alive remains disabled for outbound website classification requests.
 - The application refreshes the Google v3 `logs` and `tiled_logs` catalog every 24 hours.
 - Only logs in the `usable` or `qualified` state are monitored, subject to the configured source denylist.
 - Each source starts at its current STH or checkpoint. Historical entries are not retrieved, and cursors are not persisted.
+- A source that is behind is read batch after batch without a pause. The poll interval applies only when the source has no known new entries.
+- Static CT data tiles are read as full tiles. Entries in an incomplete tile are read as a partial tile only after they wait 20 seconds.
 - Both certificates and precertificates are processed.
 - The ASN.1 parser extracts DNS SAN entries and legacy CN values without constructing a complete certificate representation.
 - Wildcard prefixes and trailing periods are removed, names are lowercased, Unicode names are converted using IDNA, and invalid names are discarded.
@@ -200,7 +202,7 @@ HTTP keep-alive remains disabled for outbound website classification requests.
 
 ## DNS resolution and outbound connection policy
 
-The integrated resolver issues IPv4 A queries over UDP/53 with EDNS(0). DNS parsing is bounded, and CNAME traversal is limited to three transitions. The resolver does not use `/etc/resolv.conf`, DoH, DoT, DNS-over-TCP, DNSSEC validation, or a DNS cache.
+The integrated resolver issues IPv4 A queries over UDP/53 with EDNS(0). DNS parsing is bounded, and CNAME traversal is limited to three transitions. UDP sockets are reused across queries; up to `--threads` idle sockets are kept. A failed query is retried once on the next server, except for NXDOMAIN, which is final. The resolver does not use `/etc/resolv.conf`, DoH, DoT, DNS-over-TCP, DNSSEC validation, or a DNS cache.
 
 The automatic selection process evaluates the following 60 public IPv4 resolver addresses:
 
@@ -221,7 +223,7 @@ The automatic selection process evaluates the following 60 public IPv4 resolver 
 1.2.4.8 210.2.4.8 208.67.222.220 208.67.220.222
 ```
 
-The benchmark runs from the application host and queries `example.com`, `iana.org`, and `cloudflare.com`. Candidates are ranked first by successful-query count and then by median round-trip time. Up to 20 successful candidates are selected and used in round-robin order. Selection is repeated every hour. If fewer than 20 candidates respond successfully, all successful candidates are used. Multiple addresses may belong to the same operator. Availability varies by network; candidates without successful benchmark responses are excluded.
+The benchmark runs from the application host and queries `example.com`, `iana.org`, and `cloudflare.com`. Candidates are ranked first by successful-query count and then by median round-trip time. All candidates are measured in parallel. Up to 20 successful candidates are selected and used in round-robin order. Selection is repeated every hour. Until the first selection finds a server, the sort pipeline discards domains and counts them in `dns.not_ready_drops`; `/all` is not affected. If fewer than 20 candidates respond successfully, all successful candidates are used. Multiple addresses may belong to the same operator. Availability varies by network; candidates without successful benchmark responses are excluded.
 
 Some resolvers apply security, family, or regional filtering. Consequently, they may return different answers or block particular domains. Use `--dns` to specify a controlled resolver set and bypass automatic selection. Address references: [public resolver catalogue](https://dnsspeedtester.com/best/) and [regional public DNS list](https://frytea.com/archives/1372/).
 

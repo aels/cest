@@ -73,10 +73,14 @@ type Config struct {
 	DialContext     DialContextFunc
 	Publish         func(path, domain string)
 	SuccessCodes    []int // Additional successful HTTP statuses; 200 is always included.
+	// Ready is optional. While it returns false, Submit discards domains, so
+	// no DNS or HTTP work starts before the resolver has servers.
+	Ready func() bool
 }
 
 // Counters are monotonic and safe for concurrent snapshots.
 type Counters struct {
+	NotReadyDrops          atomic.Uint64
 	DNSLookupErrors        atomic.Uint64
 	PrivateAddressDrops    atomic.Uint64
 	HTTP200                atomic.Uint64
@@ -91,6 +95,7 @@ type Counters struct {
 
 // Stats is a point-in-time snapshot.
 type Stats struct {
+	NotReadyDrops          uint64
 	DNSLookupErrors        uint64
 	PrivateAddressDrops    uint64
 	HTTP200                uint64
@@ -198,6 +203,10 @@ func (s *Sorter) Submit(domain string) {
 	if s.ctx.Err() != nil {
 		return
 	}
+	if s.cfg.Ready != nil && !s.cfg.Ready() {
+		s.counters.NotReadyDrops.Add(1)
+		return
+	}
 	s.queue.Push(domain)
 	select {
 	case s.wake <- struct{}{}:
@@ -230,6 +239,7 @@ func (s *Sorter) Close() {
 func (s *Sorter) Counters() *Counters { return &s.counters }
 func (s *Sorter) Stats() Stats {
 	return Stats{
+		NotReadyDrops:   s.counters.NotReadyDrops.Load(),
 		DNSLookupErrors: s.counters.DNSLookupErrors.Load(), PrivateAddressDrops: s.counters.PrivateAddressDrops.Load(),
 		HTTP200: s.counters.HTTP200.Load(), HTTPS200: s.counters.HTTPS200.Load(),
 		HTTPAdditionalSuccess: s.counters.HTTPAdditionalSuccess.Load(), HTTPSAdditionalSuccess: s.counters.HTTPSAdditionalSuccess.Load(), Non200: s.counters.Non200.Load(),
@@ -248,14 +258,17 @@ func (s *Sorter) process(domain string) {
 		s.counters.PrivateAddressDrops.Add(1)
 		return
 	}
-	response, ok := s.request(domain, ip, false)
+	// HTTPS goes first: most HTTP requests only return a redirect to HTTPS.
+	response, ok := s.request(domain, ip, true)
 	if !ok {
-		response, ok = s.request(domain, ip, true)
+		response, ok = s.request(domain, ip, false)
 	}
 	if !ok {
 		return
 	}
-	for _, path := range s.match(response) {
+	paths := s.match(response)
+	response.release()
+	for _, path := range paths {
 		s.cfg.Publish(path, domain)
 	}
 }

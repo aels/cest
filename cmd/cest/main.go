@@ -183,13 +183,13 @@ func run(cfg config.Config) error {
 				return err
 			}
 		}
-		resolver, err := dnsresolver.New(dnsresolver.Config{Servers: servers, Timeout: cfg.DNSTimeout, Counters: application.resolverCounters, Hooks: dnsresolver.Hooks{PoolChanged: func(p []netip.Addr) { log.Printf("DNS pool updated: %v", p) }}})
+		resolver, err := dnsresolver.New(dnsresolver.Config{Servers: servers, Timeout: cfg.DNSTimeout, Sockets: cfg.Threads, Counters: application.resolverCounters, Hooks: dnsresolver.Hooks{PoolChanged: func(p []netip.Addr) { log.Printf("DNS pool updated: %v", p) }}})
 		if err != nil {
 			return err
 		}
 		resolver.StartRefresh(ctx)
 		defer resolver.Close()
-		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Streams, SuccessCodes: cfg.SuccessCodes, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Publish: func(path, name string) { hub.Publish(path, name) }})
+		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Streams, SuccessCodes: cfg.SuccessCodes, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Ready: resolver.Ready, Publish: func(path, name string) { hub.Publish(path, name) }})
 		if err != nil {
 			return err
 		}
@@ -328,7 +328,7 @@ func (a *app) updateStats() {
 	s := statsSnapshot{SnapshotUnix: time.Now().Unix(), Uptime: uint64(time.Since(a.start).Seconds()),
 		CT:      map[string]uint64{"active_logs": ct.Workers, "entries": ct.Entries, "parse_errors": ct.Malformed, "source_errors": ct.FetchErrors},
 		Domains: map[string]uint64{"extracted": a.dom.extracted.Load(), "invalid": a.dom.invalid.Load(), "builtin_filtered": a.dom.builtinFiltered.Load(), "custom_filtered": a.dom.customFiltered.Load(), "duplicates": a.dom.duplicates.Load(), "published_all": a.dom.published.Load()},
-		DNS:     map[string]uint64{"queries": rc.Queries.Load(), "errors": rc.Errors.Load(), "timeouts": rc.Timeouts.Load(), "truncated": rc.Truncated.Load(), "private_address_drops": ss.PrivateAddressDrops},
+		DNS:     map[string]uint64{"queries": rc.Queries.Load(), "errors": rc.Errors.Load(), "timeouts": rc.Timeouts.Load(), "truncated": rc.Truncated.Load(), "private_address_drops": ss.PrivateAddressDrops, "not_ready_drops": ss.NotReadyDrops},
 		HTTP:    map[string]uint64{"http_200": ss.HTTP200, "https_200": ss.HTTPS200, "http_additional_code_success": ss.HTTPAdditionalSuccess, "https_additional_code_success": ss.HTTPSAdditionalSuccess, "non_success_status": ss.Non200, "connect_errors": ss.ConnectErrors, "read_timeouts": ss.ReadTimeouts, "body_limit_hits": ss.BodyLimitHits},
 		Queues:  map[string]any{"sort_length": ss.QueueLength, "sort_capacity": ss.QueueCapacity, "sort_queue_dropped": ss.QueueDropped}, Routes: routes}
 	data, err := json.Marshal(s)

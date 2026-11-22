@@ -69,26 +69,45 @@ func denied(raw rawLog) bool {
 	return false
 }
 
+// cursor is the in-memory position of one worker. size is the last observed
+// tree size; it is refreshed only when the worker has no known work left.
+// partialSince is when the worker first waited on an incomplete data tile.
+type cursor struct {
+	next, size   uint64
+	partialSince time.Time
+}
+
+func (c *cursor) caughtUp() bool { return c.next >= c.size }
+
 func (s *Stream) runWorker(ctx context.Context, spec logSpec) {
 	backoff := time.Second
 	initialized := false
-	var next uint64
+	var cur cursor
 	for {
 		var err error
+		idle := true
 		if !initialized {
 			if spec.kind == sourceTiled {
-				next, err = s.fetchCheckpoint(ctx, spec.baseURL)
+				cur.next, err = s.fetchCheckpoint(ctx, spec.baseURL)
 			} else {
-				next, err = s.fetchSTH(ctx, spec.baseURL)
+				cur.next, err = s.fetchSTH(ctx, spec.baseURL)
 			}
+			cur.size = cur.next
 			initialized = err == nil
 		} else if spec.kind == sourceTiled {
-			err = s.pollTiled(ctx, spec, &next)
+			idle, err = s.pollTiled(ctx, spec, &cur)
 		} else {
-			err = s.pollRFC6962(ctx, spec, &next)
+			idle, err = s.pollRFC6962(ctx, spec, &cur)
 		}
 		if err == nil {
 			backoff = time.Second
+			// A worker that is behind fetches the next batch immediately.
+			if !idle {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
 			if !sleepContext(ctx, s.cfg.PollInterval) {
 				return
 			}
@@ -118,14 +137,26 @@ func (s *Stream) fetchSTH(ctx context.Context, base string) (uint64, error) {
 	return sth.TreeSize, err
 }
 
-func (s *Stream) pollRFC6962(ctx context.Context, spec logSpec, next *uint64) error {
-	size, err := s.fetchSTH(ctx, spec.baseURL)
-	if err != nil || size <= *next {
-		return err
+// pollRFC6962 fetches one get-entries batch. It fetches a new STH only when the
+// cursor has caught up with the last known tree size. idle reports that no new
+// entries are known, so the caller should wait before the next poll.
+func (s *Stream) pollRFC6962(ctx context.Context, spec logSpec, cur *cursor) (idle bool, err error) {
+	if cur.caughtUp() {
+		size, err := s.fetchSTH(ctx, spec.baseURL)
+		if err != nil {
+			return true, err
+		}
+		if size > cur.size {
+			cur.size = size
+		}
+		if cur.caughtUp() {
+			return true, nil
+		}
 	}
+	next := &cur.next
 	end := *next + uint64(s.cfg.BatchSize) - 1
-	if end >= size {
-		end = size - 1
+	if end >= cur.size {
+		end = cur.size - 1
 	}
 	endpoint := fmt.Sprintf("%s/ct/v1/get-entries?start=%d&end=%d", spec.baseURL, *next, end)
 	var response struct {
@@ -134,10 +165,10 @@ func (s *Stream) pollRFC6962(ctx context.Context, spec logSpec, next *uint64) er
 		} `json:"entries"`
 	}
 	if err := s.getJSON(ctx, endpoint, maxResponseBody, &response); err != nil {
-		return err
+		return true, err
 	}
-	if len(response.Entries) == 0 || len(response.Entries) > s.cfg.BatchSize {
-		return errors.New("ctstream: invalid get-entries count")
+	if len(response.Entries) == 0 || len(response.Entries) > int(end-*next+1) {
+		return true, errors.New("ctstream: invalid get-entries count")
 	}
 	for _, raw := range response.Entries {
 		leaf, err := base64.StdEncoding.DecodeString(raw.LeafInput)
@@ -153,11 +184,11 @@ func (s *Stream) pollRFC6962(ctx context.Context, spec logSpec, next *uint64) er
 			continue
 		}
 		if !s.emit(ctx, Entry{DER: der, IsTBS: tbs}) {
-			return ctx.Err()
+			return true, ctx.Err()
 		}
 		*next++
 	}
-	return nil
+	return cur.caughtUp(), nil
 }
 
 func (s *Stream) fetchCheckpoint(ctx context.Context, base string) (uint64, error) {
@@ -176,22 +207,45 @@ func (s *Stream) fetchCheckpoint(ctx context.Context, base string) (uint64, erro
 	return size, scanner.Err()
 }
 
-func (s *Stream) pollTiled(ctx context.Context, spec logSpec, next *uint64) error {
-	size, err := s.fetchCheckpoint(ctx, spec.baseURL)
-	if err != nil || size <= *next {
-		return err
+// pollTiled fetches at most one data tile. It fetches a new checkpoint only when
+// the cursor has caught up with the last known tree size.
+//
+// Full tiles are preferred: a partial tile repeats every entry that an earlier
+// partial fetch of the same tile already returned. Pending entries in an
+// incomplete tile are fetched only after they have waited PartialTileDelay.
+func (s *Stream) pollTiled(ctx context.Context, spec logSpec, cur *cursor) (idle bool, err error) {
+	// A worker that waits for the current tile to fill also needs a fresh
+	// checkpoint. A worker that is behind by full tiles does not.
+	tileEnd := (cur.next/tileWidth + 1) * tileWidth
+	if cur.caughtUp() || cur.size < tileEnd {
+		size, err := s.fetchCheckpoint(ctx, spec.baseURL)
+		if err != nil {
+			return true, err
+		}
+		if size > cur.size {
+			cur.size = size
+		}
+		if cur.caughtUp() {
+			return true, nil
+		}
 	}
-	tile := *next / tileWidth
-	available := size - tile*tileWidth
+	tile := cur.next / tileWidth
+	available := cur.size - tile*tileWidth
 	width := uint64(tileWidth)
 	path := encodeTilePath(tile)
 	if available < tileWidth {
+		if cur.partialSince.IsZero() {
+			cur.partialSince = time.Now()
+		}
+		if time.Since(cur.partialSince) < s.cfg.PartialTileDelay {
+			return true, nil
+		}
 		width = available
 		path += ".p/" + strconv.FormatUint(width, 10)
 	}
 	body, err := s.get(ctx, spec.baseURL+"/tile/data/"+path, maxResponseBody)
 	if err != nil {
-		return err
+		return true, err
 	}
 	entries, err := parseTileData(body, int(width))
 	if err != nil || len(entries) != int(width) {
@@ -199,16 +253,17 @@ func (s *Stream) pollTiled(ctx context.Context, spec logSpec, next *uint64) erro
 		if err == nil {
 			err = errMalformedWire
 		}
-		return err
+		return true, err
 	}
-	start := int(*next - tile*tileWidth)
+	start := int(cur.next - tile*tileWidth)
 	for i := start; i < len(entries); i++ {
 		if !s.emit(ctx, Entry{DER: entries[i].der, IsTBS: entries[i].isTBS}) {
-			return ctx.Err()
+			return true, ctx.Err()
 		}
-		*next++
+		cur.next++
 	}
-	return nil
+	cur.partialSince = time.Time{}
+	return cur.caughtUp(), nil
 }
 
 func (s *Stream) emit(ctx context.Context, entry Entry) bool {

@@ -58,14 +58,13 @@ func parseResponse(msg []byte, id uint16, question string) (parsedAnswer, bool, 
 	if flags&0x8000 == 0 {
 		return out, true, nil
 	}
-	if flags&0x0200 != 0 {
-		return out, false, ErrTruncated
-	}
-	if flags&0x000f != 0 {
-		return out, false, fmt.Errorf("dnsresolver: response code %d", flags&15)
-	}
 	qd := int(binary.BigEndian.Uint16(msg[4:6]))
 	an := int(binary.BigEndian.Uint16(msg[6:8]))
+	if qd == 0 && flags&0x020f != 0 {
+		// Some servers omit the question in error responses. The ID and the
+		// source address are the only identity checks available.
+		return out, false, responseError(flags)
+	}
 	if qd != 1 {
 		return out, true, nil
 	}
@@ -83,6 +82,9 @@ func parseResponse(msg []byte, id uint16, question string) (parsedAnswer, bool, 
 	off += 4
 	if !strings.EqualFold(strings.TrimSuffix(qname, "."), strings.TrimSuffix(question, ".")) || qtype != 1 || qclass != 1 {
 		return out, true, nil
+	}
+	if flags&0x020f != 0 {
+		return out, false, responseError(flags)
 	}
 	cnames := make(map[string]string)
 	addresses := make(map[string][]netip.Addr)
@@ -137,6 +139,18 @@ func parseResponse(msg []byte, id uint16, question string) (parsedAnswer, bool, 
 		}
 		cur = target
 	}
+}
+
+// responseError maps the TC bit and a non-zero RCODE to an error.
+func responseError(flags uint16) error {
+	if flags&0x0200 != 0 {
+		return ErrTruncated
+	}
+	rcode := flags & 0x000f
+	if rcode == 3 {
+		return ErrNXDomain
+	}
+	return fmt.Errorf("dnsresolver: response code %d", rcode)
 }
 
 func decodeName(msg []byte, start int) (string, int, error) {
