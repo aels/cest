@@ -73,6 +73,9 @@ type Config struct {
 	DialContext     DialContextFunc
 	Publish         func(path, domain string)
 	SuccessCodes    []int // Additional successful HTTP statuses; 200 is always included.
+	// Probes is the ordered list of HTTP attempts. The first attempt with a
+	// successful status wins. Empty selects DefaultProbes.
+	Probes []Probe
 	// Ready is optional. While it returns false, Submit discards domains, so
 	// no DNS or HTTP work starts before the resolver has servers.
 	Ready func() bool
@@ -180,6 +183,14 @@ func New(parent context.Context, cfg Config) (*Sorter, error) {
 	for code := range seenCodes {
 		cfg.SuccessCodes = append(cfg.SuccessCodes, code)
 	}
+	if len(cfg.Probes) == 0 {
+		cfg.Probes = DefaultProbes
+	}
+	for _, p := range cfg.Probes {
+		if p.Port == 0 {
+			return nil, fmt.Errorf("sorter: invalid probe %s", p)
+		}
+	}
 	if cfg.DialContext == nil {
 		d := &net.Dialer{Timeout: cfg.ConnectTimeout}
 		cfg.DialContext = d.DialContext
@@ -258,10 +269,14 @@ func (s *Sorter) process(domain string) {
 		s.counters.PrivateAddressDrops.Add(1)
 		return
 	}
-	// HTTPS goes first: most HTTP requests only return a redirect to HTTPS.
-	response, ok := s.request(domain, ip, true)
-	if !ok {
-		response, ok = s.request(domain, ip, false)
+	// The default probes put HTTPS first: most HTTP requests only return a
+	// redirect to HTTPS.
+	var response responseData
+	ok := false
+	for _, probe := range s.cfg.Probes {
+		if response, ok = s.request(domain, ip, probe); ok {
+			break
+		}
 	}
 	if !ok {
 		return

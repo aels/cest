@@ -149,7 +149,7 @@ func run(cfg config.Config) error {
 	if cfg.Expose {
 		bind = "0.0.0.0"
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(bind, strconv.Itoa(cfg.Port)))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(bind, strconv.Itoa(cfg.WSPort)))
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func run(cfg config.Config) error {
 		}
 		resolver.StartRefresh(ctx)
 		defer resolver.Close()
-		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Streams, SuccessCodes: cfg.SuccessCodes, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Ready: resolver.Ready, Publish: func(path, name string) { hub.Publish(path, name) }})
+		application.sorter, err = sorter.New(ctx, sorter.Config{Rules: cfg.Streams, SuccessCodes: cfg.SuccessCodes, Probes: cfg.Probes, Threads: cfg.Threads, ConnectTimeout: cfg.ConnectTimeout, ResponseTimeout: cfg.ResponseTimeout, BodyLimit: cfg.BodyLimitKB * 1024, Resolver: resolver, Ready: resolver.Ready, Publish: func(path, name string) { hub.Publish(path, name) }})
 		if err != nil {
 			return err
 		}

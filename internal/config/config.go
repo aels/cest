@@ -20,9 +20,10 @@ const Version = "0.1.0"
 type Config struct {
 	NoFilter                                    bool
 	Filter                                      string
-	Port                                        int
+	WSPort                                      int
 	Streams                                     []sorter.Rule
 	SuccessCodes                                []int
+	Probes                                      []sorter.Probe // nil selects sorter.DefaultProbes
 	DNSServers                                  string
 	Expose, Daemon                              bool
 	Threads, ClientBufferMB, BodyLimitKB        int
@@ -60,7 +61,7 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 			return Config{}, true, nil
 		}
 	}
-	cfg := Config{Port: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: 2 * time.Second, ResponseTimeout: 5 * time.Second}
+	cfg := Config{WSPort: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: 2 * time.Second, ResponseTimeout: 5 * time.Second}
 	fs := flag.NewFlagSet("cest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var rawStreams []string
@@ -103,7 +104,15 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 		}
 	}
 	addOnce([]string{"f", "filter"}, "filter", func(s string) error { cfg.Filter = s; return nil }, "additional regexp")
-	addOnce([]string{"p", "port"}, "port", atoi(&cfg.Port), "listen port")
+	addOnce([]string{"ws-port"}, "ws-port", atoi(&cfg.WSPort), "HTTP/WebSocket listen port")
+	addOnce([]string{"p", "ports"}, "ports", func(value string) error {
+		probes, err := sorter.ParseProbes(value)
+		if err != nil {
+			return err
+		}
+		cfg.Probes = probes
+		return nil
+	}, "ordered HTTP probe list")
 	addOnce([]string{"dns"}, "dns", func(s string) error { cfg.DNSServers = s; return nil }, "DNS IPv4 list")
 	addOnce([]string{"t", "threads"}, "threads", atoi(&cfg.Threads), "sort workers")
 	addOnce([]string{"client-buffer-mb"}, "client-buffer-mb", atoi(&cfg.ClientBufferMB), "per-client buffer")
@@ -132,8 +141,8 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 	if help || version {
 		return cfg, true, nil
 	}
-	if cfg.Port < 1 || cfg.Port > 65535 {
-		return cfg, false, errors.New("port must be 1..65535")
+	if cfg.WSPort < 1 || cfg.WSPort > 65535 {
+		return cfg, false, errors.New("ws-port must be 1..65535")
 	}
 	if cfg.Threads < 1 || cfg.Threads > 100000 {
 		return cfg, false, errors.New("threads must be 1..100000")
@@ -190,8 +199,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage: cest [options]
   -nf, --nofilter                 disable built-in filter
   -f, --filter REGEX              additional case-insensitive exclusion regexp
-  -p, --port PORT                 listen port (default 4949)
+  -ws-port, --ws-port PORT        HTTP/WebSocket listen port (default 4949)
   -s, --stream PATH:LITERAL       repeatable header/body classifier
+  -p, --ports LIST                ordered probe list, e.g. http:80,https:443,3000
+                                  (default https:443,http:80)
   -c, --code CODE,CODE            additional successful HTTP status codes
   -dns, --dns IP,IP,...           custom UDP DNS servers
   -expose, --expose               listen on 0.0.0.0

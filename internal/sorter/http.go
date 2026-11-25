@@ -115,20 +115,19 @@ func (s *Sorter) initHTTP() {
 	}
 }
 
-func (s *Sorter) request(domain string, ip netip.Addr, https bool) (responseData, bool) {
+func (s *Sorter) request(domain string, ip netip.Addr, probe Probe) (responseData, bool) {
 	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.ResponseTimeout)
 	defer cancel()
 	ctx = context.WithValue(ctx, dialTargetKey{}, dialTarget{ip: ip, serverName: domain})
 
-	scheme := "http"
-	if https {
-		scheme = "https"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+domain+"/", nil)
+	https := probe.HTTPS
+	// The Host header carries the port only when it is not the scheme default.
+	host := probe.urlHost(domain)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.scheme()+"://"+host+"/", nil)
 	if err != nil {
 		return responseData{}, false
 	}
-	req.Host = domain
+	req.Host = host
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Close = true

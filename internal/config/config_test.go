@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -10,11 +11,44 @@ func TestParseDefaultsAndStreams(t *testing.T) {
 	if err != nil || done {
 		t.Fatalf("parse: done=%v err=%v", done, err)
 	}
-	if cfg.Port != 4949 || cfg.Threads != 2000 || len(cfg.Streams) != 2 {
+	if cfg.WSPort != 4949 || cfg.Threads != 2000 || len(cfg.Streams) != 2 || cfg.Probes != nil {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	if len(cfg.SuccessCodes) != 2 || cfg.SuccessCodes[0] != 303 || cfg.SuccessCodes[1] != 404 {
 		t.Fatalf("success codes = %v", cfg.SuccessCodes)
+	}
+}
+
+func TestParseWSPortAndProbes(t *testing.T) {
+	for _, args := range [][]string{
+		{"-ws-port", "4200", "-p", "http:80,https:443,3000"},
+		{"--ws-port", "4200", "--ports", "http:80,https:443,3000"},
+	} {
+		cfg, _, err := Parse(args, &bytes.Buffer{})
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if cfg.WSPort != 4200 {
+			t.Fatalf("%v: ws-port = %d", args, cfg.WSPort)
+		}
+		if want := "[http:80 https:443 https:3000 http:3000]"; fmt.Sprint(cfg.Probes) != want {
+			t.Fatalf("%v: probes = %v, want %s", args, cfg.Probes, want)
+		}
+	}
+}
+
+func TestParseRejectsBadPorts(t *testing.T) {
+	for _, args := range [][]string{
+		{"--port", "4949"},
+		{"--ws-port", "0"},
+		{"--ws-port", "65536"},
+		{"-p", "4949x"},
+		{"-p", "ftp:21"},
+		{"-p", "80", "-p", "443"},
+	} {
+		if _, _, err := Parse(args, &bytes.Buffer{}); err == nil {
+			t.Errorf("%v accepted", args)
+		}
 	}
 }
 

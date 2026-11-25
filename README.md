@@ -58,8 +58,9 @@ Both the short and long forms shown below are supported.
 |---|---:|---|
 | `-nf`, `--nofilter` | disabled | Disable only the built-in noise filter. A regex supplied with `--filter` remains active. |
 | `-f REGEX`, `--filter REGEX` | none | Additional case-insensitive exclusion regex applied to normalized full domain names. May be specified once. Invalid expressions stop startup. |
-| `-p PORT`, `--port PORT` | `4949` | Port for the HTTP and WebSocket server. |
+| `-ws-port PORT`, `--ws-port PORT` | `4949` | Port for the HTTP and WebSocket server. |
 | `-s PATH:LITERAL`, `--stream PATH:LITERAL` | none | Add a case-sensitive response header/body classifier and WebSocket route. Repeatable; duplicate paths merge into one stream. |
+| `-p LIST`, `--ports LIST` | `https:443,http:80` | Ordered list of HTTP attempts for each classified domain, e.g. `http:80,https:443,3000`. See [Probe ports](#probe-ports). |
 | `-c LIST`, `--code LIST` | none | Comma-separated additional successful statuses, e.g. `303,404`. Status `200` is always successful. |
 | `-dns LIST`, `--dns LIST` | automatic | Comma-separated public IPv4 DNS servers, for example `1.1.1.1,8.8.8.8`. Port is always UDP/53. |
 | `-expose`, `--expose` | disabled | Bind to `0.0.0.0` instead of `127.0.0.1`. There is no built-in auth/TLS - share it with friends & enemies. |
@@ -89,10 +90,23 @@ For each domain admitted to the HTTP classification pipeline, the application pe
 
 1. Publishes the domain to `/all` before classification.
 2. Resolves its IPv4 address using the integrated UDP DNS resolver.
-3. Issues `GET https://domain/` without following redirects.
-4. Accepts status `200` and any additional status codes specified by `--code`.
-5. Attempts `GET http://domain/` once if the HTTPS attempt fails.
-6. Searches the accepted response headers and body for the configured case-sensitive literals and publishes the domain to each matching stream path.
+3. Issues `GET` requests in the order of the `--ports` list, without following redirects. The default list is `https:443,http:80`: `GET https://domain/` first, then `GET http://domain/`.
+4. Accepts status `200` and any additional status codes specified by `--code`. The first accepted response stops the sequence; later attempts are not made.
+5. Searches the accepted response headers and body for the configured case-sensitive literals and publishes the domain to each matching stream path.
+
+### Probe ports
+
+`-p`/`--ports` sets the ordered list of HTTP attempts. Each comma-separated element has one of these forms:
+
+| Element | Attempts |
+|---|---|
+| `https:PORT` | HTTPS on `PORT`. |
+| `http:PORT` | Plain HTTP on `PORT`. |
+| `PORT` | HTTPS on `PORT`, then plain HTTP on `PORT`. The scheme of a bare port is unknown, so both are tried. |
+
+`PORT` must be 1..65535. Attempts run in list order and stop at the first accepted status. Repeated attempts are removed; the first occurrence keeps its position. For example, `http:80,https:443,3000` tries `http:80`, `https:443`, `https:3000`, and `http:3000`.
+
+Every attempt uses the same resolved IPv4 address. The HTTP `Host` header contains the port only when it is not the scheme default (80 for HTTP, 443 for HTTPS); TLS SNI is always the bare domain. Each attempt has its own `--response-timeout`, so a long list increases the worst-case time per domain. The option has no effect without `--stream`.
 
 ## Configuration examples
 
@@ -133,6 +147,16 @@ websocat ws://127.0.0.1:4949/shops
 
 A domain may be published to multiple endpoints if rules with different paths match. Matching both `wordpress` signatures produces only one publication to `/wordpress` for that response. These signatures indicate literal matches, not verified identification of the application or its version.
 
+### Configure probe ports
+
+The following configuration also checks two common application ports. Plain HTTP on 80 goes first, then HTTPS on 443, then both schemes on 8080 and 8443.
+
+```bash
+cest \
+  --stream 'wordpress:wp-content' \
+  --ports 'http:80,https:443,8080,8443'
+```
+
 ### Configure DNS resolvers and network timeouts
 
 An explicit resolver list disables automatic resolver selection. Each address must be an IPv4 literal; the destination port is UDP/53.
@@ -151,7 +175,7 @@ Resolver capacity depends on network latency, packet loss, provider rate limits,
 ### Bind to an external interface
 
 ```bash
-cest --expose --port 4200 --daemon --stream 'wordpress:wp-content'
+cest --expose --ws-port 4200 --daemon --stream 'wordpress:wp-content'
 ```
 
 This configuration binds the HTTP and WebSocket server to `0.0.0.0:4200` and runs the process in daemon mode. The server provides neither authentication nor TLS. Restrict network access through a firewall or a reverse proxy as required. Remote clients can consume classified streams without performing the corresponding HTTP requests themselves.
