@@ -67,8 +67,8 @@ Both the short and long forms shown below are supported.
 | `-t N`, `--threads N` | `2000` | Maximum concurrent sort workers. The sort ring buffer holds `N × 10` pending domains. |
 | `--client-buffer-mb N` | `10` | Independent unsent-message buffer for each WebSocket client, in MiB. |
 | `--dns-timeout DURATION` | `1s` | Timeout for a UDP DNS query. Uses Go durations such as `500ms` or `2s`. |
-| `--connect-timeout DURATION` | `2s` | TCP connection timeout for HTTP and HTTPS checks. |
-| `--response-timeout DURATION` | `5s` | Total timeout for each HTTP or HTTPS attempt. |
+| `--connect-timeout DURATION` | `5s` | TCP connection timeout for HTTP and HTTPS checks. The TLS handshake has a separate limit of the same value. |
+| `--response-timeout DURATION` | `8s` | Total timeout for each HTTP or HTTPS attempt, including connection, response headers, and body reading. |
 | `--body-limit-kb N` | `200` | Maximum decompressed response bytes inspected per request. |
 | `-d`, `--daemon` | disabled | Self-daemonize and run in the background. A service supervisor is still preferable for production. |
 | `-h`, `--help` | — | Show command help. |

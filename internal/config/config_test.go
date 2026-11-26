@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestParseDefaultsAndStreams(t *testing.T) {
@@ -13,6 +14,9 @@ func TestParseDefaultsAndStreams(t *testing.T) {
 	}
 	if cfg.WSPort != 4949 || cfg.Threads != 2000 || len(cfg.Streams) != 2 || cfg.Probes != nil {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if cfg.ConnectTimeout != 5*time.Second || cfg.ResponseTimeout != 8*time.Second {
+		t.Fatalf("timeouts: connect=%v response=%v", cfg.ConnectTimeout, cfg.ResponseTimeout)
 	}
 	if len(cfg.SuccessCodes) != 2 || cfg.SuccessCodes[0] != 303 || cfg.SuccessCodes[1] != 404 {
 		t.Fatalf("success codes = %v", cfg.SuccessCodes)

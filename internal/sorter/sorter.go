@@ -21,8 +21,8 @@ import (
 
 const (
 	DefaultThreads         = 2000
-	DefaultConnectTimeout  = 2 * time.Second
-	DefaultResponseTimeout = 5 * time.Second
+	DefaultConnectTimeout  = 5 * time.Second
+	DefaultResponseTimeout = 8 * time.Second
 	DefaultBodyLimit       = 200 * 1024
 	maxThreads             = 100000
 )

@@ -61,7 +61,7 @@ func Parse(args []string, stderr io.Writer) (Config, bool, error) {
 			return Config{}, true, nil
 		}
 	}
-	cfg := Config{WSPort: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: 2 * time.Second, ResponseTimeout: 5 * time.Second}
+	cfg := Config{WSPort: 4949, Threads: 2000, ClientBufferMB: 10, BodyLimitKB: 200, DNSTimeout: time.Second, ConnectTimeout: sorter.DefaultConnectTimeout, ResponseTimeout: sorter.DefaultResponseTimeout}
 	fs := flag.NewFlagSet("cest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var rawStreams []string
@@ -209,8 +209,8 @@ func printUsage(w io.Writer) {
   -t, --threads N                 sorter workers (default 2000)
       --client-buffer-mb N         per-client buffer (default 10)
       --dns-timeout DURATION       DNS timeout (default 1s)
-      --connect-timeout DURATION   connect timeout (default 2s)
-      --response-timeout DURATION  response timeout (default 5s)
+      --connect-timeout DURATION   connect timeout (default 5s)
+      --response-timeout DURATION  response timeout (default 8s)
       --body-limit-kb N            response body limit (default 200)
   -d, --daemon                    run in background
   -h, --help                      show help
